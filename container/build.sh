@@ -12,12 +12,17 @@ TAG="${1:-latest}"
 echo "Building NanoClaw agent container image..."
 echo "Image: ${IMAGE_NAME}:${TAG}"
 
-# Build with Apple Container
-container build -t "${IMAGE_NAME}:${TAG}" .
+# Build with Docker
+docker build -t "${IMAGE_NAME}:${TAG}" .
 
 echo ""
 echo "Build complete!"
 echo "Image: ${IMAGE_NAME}:${TAG}"
 echo ""
+echo "Installed CLI tools:"
+echo "  - superhuman (from ~/projects/superhuman-cli)"
+echo "  - morgen (from ~/projects/morgen-cli)"
+echo ""
 echo "Test with:"
-echo "  echo '{\"prompt\":\"What is 2+2?\",\"groupFolder\":\"test\",\"chatJid\":\"test@g.us\",\"isMain\":false}' | container run -i ${IMAGE_NAME}:${TAG}"
+echo "  docker run -i --rm ${IMAGE_NAME}:${TAG} superhuman --version"
+echo "  docker run -i --rm ${IMAGE_NAME}:${TAG} morgen --version"

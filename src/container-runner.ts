@@ -1,6 +1,6 @@
 /**
  * Container Runner for NanoClaw
- * Spawns agent execution in Apple Container and handles IPC
+ * Spawns agent execution in Docker container and handles IPC
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
@@ -85,7 +85,7 @@ function buildVolumeMounts(
     });
 
     // Global memory directory (read-only for non-main)
-    // Apple Container only supports directory mounts, not file mounts
+    // Docker bind mounts work with both files and directories
     const globalDir = path.join(GROUPS_DIR, 'global');
     if (fs.existsSync(globalDir)) {
       mounts.push({
@@ -112,19 +112,90 @@ function buildVolumeMounts(
     }, null, 2) + '\n');
   }
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+  // Sync skills from multiple locations into each group's .claude/skills/
   const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
+  const copyRecursive = (src: string, dst: string) => {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      const srcPath = path.join(src, entry.name);
+      const dstPath = path.join(dst, entry.name);
+      // Skip broken symlinks
+      try {
+        const stat = fs.statSync(srcPath);
+        if (stat.isDirectory()) {
+          copyRecursive(srcPath, dstPath);
+        } else {
+          fs.copyFileSync(srcPath, dstPath);
+        }
+      } catch (err: any) {
+        if (err.code === 'ENOENT') {
+          // Broken symlink or file disappeared - skip it
+          logger.debug({ srcPath, err: err.message }, 'Skipping broken symlink or missing file');
+          continue;
+        }
+        throw err;
+      }
+    }
+  };
+
+  // 1. Copy from container/skills/ (container-specific skills)
+  const containerSkills = path.join(process.cwd(), 'container', 'skills');
+  if (fs.existsSync(containerSkills)) {
+    for (const skillDir of fs.readdirSync(containerSkills)) {
+      const srcDir = path.join(containerSkills, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.mkdirSync(dstDir, { recursive: true });
-      for (const file of fs.readdirSync(srcDir)) {
-        const srcFile = path.join(srcDir, file);
-        const dstFile = path.join(dstDir, file);
-        fs.copyFileSync(srcFile, dstFile);
+      copyRecursive(srcDir, path.join(skillsDst, skillDir));
+    }
+  }
+
+  // 2. Copy from .claude/skills/ (project-level skills like setup, debug, customize)
+  const projectSkills = path.join(process.cwd(), '.claude', 'skills');
+  if (fs.existsSync(projectSkills)) {
+    for (const skillDir of fs.readdirSync(projectSkills)) {
+      const srcDir = path.join(projectSkills, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      copyRecursive(srcDir, path.join(skillsDst, skillDir));
+    }
+  }
+
+  // 3. Copy from ~/.claude/skills/ (global user skills)
+  const globalSkills = path.join(homeDir, '.claude', 'skills');
+  if (fs.existsSync(globalSkills)) {
+    for (const skillDir of fs.readdirSync(globalSkills)) {
+      const srcDir = path.join(globalSkills, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      copyRecursive(srcDir, path.join(skillsDst, skillDir));
+    }
+  }
+
+  // 4. Copy from ~/projects/workflows/skills/ (workflows plugin)
+  const workflowsSkills = path.join(homeDir, 'projects', 'workflows', 'skills');
+  if (fs.existsSync(workflowsSkills)) {
+    for (const skillDir of fs.readdirSync(workflowsSkills)) {
+      const srcDir = path.join(workflowsSkills, skillDir);
+      const stat = fs.statSync(srcDir);
+      if (!stat.isDirectory() && !stat.isSymbolicLink()) continue;
+      // For workflows, also resolve symlinks
+      const realPath = fs.realpathSync(srcDir);
+      if (fs.statSync(realPath).isDirectory()) {
+        copyRecursive(realPath, path.join(skillsDst, skillDir));
+      }
+    }
+  }
+
+  // 5. Copy skills from CLI tool projects (superhuman, morgen, etc.)
+  const cliSkillProjects = ['superhuman-cli', 'morgen-cli'];
+  for (const project of cliSkillProjects) {
+    const projectSkillsDir = path.join(homeDir, 'projects', project, '.claude', 'skills');
+    if (fs.existsSync(projectSkillsDir)) {
+      for (const skillDir of fs.readdirSync(projectSkillsDir)) {
+        const srcDir = path.join(projectSkillsDir, skillDir);
+        try {
+          if (!fs.statSync(srcDir).isDirectory()) continue;
+          copyRecursive(srcDir, path.join(skillsDst, skillDir));
+        } catch {
+          continue;
+        }
       }
     }
   }
@@ -146,7 +217,7 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Environment file directory (workaround for Apple Container -i env var bug)
+  // Environment file directory (keeps credentials out of process listings)
   // Only expose specific auth variables needed by Claude Code, not the entire .env
   const envDir = path.join(DATA_DIR, 'env');
   fs.mkdirSync(envDir, { recursive: true });
@@ -159,6 +230,17 @@ function buildVolumeMounts(
       if (!trimmed || trimmed.startsWith('#')) return false;
       return allowedVars.some((v) => trimmed.startsWith(`${v}=`));
     });
+
+    // Also inject Readwise token if available (for librarian skill)
+    const readwiseTokenPath = '/var/folders/01/wzs3mqmn3jx2b81f0dcq9w8h0000gq/T/agenix/readwise-token';
+    try {
+      const readwiseToken = fs.readFileSync(readwiseTokenPath, 'utf-8').trim();
+      if (readwiseToken) {
+        filteredLines.push(`READWISE_TOKEN=${readwiseToken}`);
+      }
+    } catch {
+      // Readwise token not available, skip
+    }
 
     if (filteredLines.length > 0) {
       fs.writeFileSync(
@@ -174,13 +256,53 @@ function buildVolumeMounts(
   }
 
   // Mount agent-runner source from host — recompiled on container startup.
-  // Bypasses Apple Container's sticky build cache for code changes.
+  // Bypasses Docker's build cache for code changes.
   const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
   mounts.push({
     hostPath: agentRunnerSrc,
     containerPath: '/app/src',
     readonly: true,
   });
+
+  // Mount ~/projects for CLI tools (superhuman-cli, morgen-cli)
+  const projectsDir = path.join(homeDir, 'projects');
+  if (fs.existsSync(projectsDir)) {
+    mounts.push({
+      hostPath: projectsDir,
+      containerPath: '/mnt/projects',
+      readonly: true,
+    });
+  }
+
+  // Mount nlm auth credentials (NotebookLM CLI)
+  const nlmDir = path.join(homeDir, '.nlm');
+  if (fs.existsSync(nlmDir)) {
+    mounts.push({
+      hostPath: nlmDir,
+      containerPath: '/home/node/.nlm',
+      readonly: false,
+    });
+  }
+
+  // Mount superhuman-cli config (cached OAuth tokens for email API access)
+  const superhumanConfigDir = path.join(homeDir, '.config', 'superhuman-cli');
+  if (fs.existsSync(superhumanConfigDir)) {
+    mounts.push({
+      hostPath: superhumanConfigDir,
+      containerPath: '/home/node/.config/superhuman-cli',
+      readonly: false,
+    });
+  }
+
+  // Mount morgen-cli config (session token for calendar API access)
+  const morgenConfigDir = path.join(homeDir, '.config', 'morgen-cli');
+  if (fs.existsSync(morgenConfigDir)) {
+    mounts.push({
+      hostPath: morgenConfigDir,
+      containerPath: '/home/node/.config/morgen-cli',
+      readonly: false,
+    });
+  }
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
@@ -196,15 +318,15 @@ function buildVolumeMounts(
 }
 
 function buildContainerArgs(mounts: VolumeMount[], containerName: string): string[] {
-  const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+  const args: string[] = ['run', '--rm', '--name', containerName,
+    // Allow container to reach host services (CDP, etc.)
+    '--add-host=host.docker.internal:host-gateway',
+  ];
 
-  // Apple Container: --mount for readonly, -v for read-write
+  // Docker: -v with :ro suffix for readonly
   for (const mount of mounts) {
     if (mount.readonly) {
-      args.push(
-        '--mount',
-        `type=bind,source=${mount.hostPath},target=${mount.containerPath},readonly`,
-      );
+      args.push('-v', `${mount.hostPath}:${mount.containerPath}:ro`);
     } else {
       args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
     }
@@ -257,9 +379,13 @@ export async function runContainerAgent(
   const logsDir = path.join(GROUPS_DIR, group.folder, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
+  // Write input to IPC directory (read by entrypoint instead of stdin)
+  const groupIpcDir = path.join(DATA_DIR, 'ipc', group.folder);
+  fs.writeFileSync(path.join(groupIpcDir, 'input.json'), JSON.stringify(input));
+
   return new Promise((resolve) => {
-    const container = spawn('container', containerArgs, {
-      stdio: ['pipe', 'pipe', 'pipe'],
+    const container = spawn('docker', containerArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     onProcess(container, containerName);
@@ -268,10 +394,6 @@ export async function runContainerAgent(
     let stderr = '';
     let stdoutTruncated = false;
     let stderrTruncated = false;
-
-    // Write input and close stdin (Apple Container doesn't flush pipe without EOF)
-    container.stdin.write(JSON.stringify(input));
-    container.stdin.end();
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';
@@ -357,7 +479,7 @@ export async function runContainerAgent(
     const killOnTimeout = () => {
       timedOut = true;
       logger.error({ group: group.name, containerName }, 'Container timeout, stopping gracefully');
-      exec(`container stop ${containerName}`, { timeout: 15000 }, (err) => {
+      exec(`docker stop ${containerName}`, { timeout: 15000 }, (err) => {
         if (err) {
           logger.warn({ group: group.name, containerName, err }, 'Graceful stop failed, force killing');
           container.kill('SIGKILL');
