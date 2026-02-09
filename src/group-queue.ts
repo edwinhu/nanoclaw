@@ -1,4 +1,4 @@
-import { ChildProcess } from 'child_process';
+import { ChildProcess, exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -139,6 +139,34 @@ export class GroupQueue {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Send SIGINT to the active container process (like Ctrl+C in Claude Code).
+   * The agent stops its current tool use and wraps up gracefully.
+   */
+  interruptGroup(groupJid: string): boolean {
+    const state = this.getGroup(groupJid);
+    if (!state.active || !state.process || state.process.killed) return false;
+    state.process.kill('SIGINT');
+    logger.info({ groupJid }, 'Sent SIGINT to container process');
+    return true;
+  }
+
+  /**
+   * Kill the active container. The next message will spawn a fresh one.
+   */
+  killGroup(groupJid: string): boolean {
+    const state = this.getGroup(groupJid);
+    if (!state.active || !state.containerName) return false;
+    const name = state.containerName;
+    exec(`docker stop ${name}`, { timeout: 15000 }, (err) => {
+      if (err) {
+        logger.warn({ groupJid, containerName: name, err }, 'docker stop failed');
+      }
+    });
+    logger.info({ groupJid, containerName: name }, 'Stopping container for restart');
+    return true;
   }
 
   /**

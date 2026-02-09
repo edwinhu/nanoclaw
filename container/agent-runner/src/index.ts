@@ -374,6 +374,7 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
+      model: 'opus',
       cwd: '/workspace/group',
       resume: sessionId,
       resumeSessionAt: resumeAt,

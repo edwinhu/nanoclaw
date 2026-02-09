@@ -18,6 +18,8 @@ import {
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   STORE_DIR,
+  TELEGRAM_BOT_TOKEN,
+  TELEGRAM_ONLY,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -52,6 +54,13 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import {
+  connectTelegram,
+  sendTelegramMessage,
+  setTelegramTyping,
+  stopTelegram,
+} from './telegram.js';
+import { TypingManager } from './typing.js';
 import { NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -62,6 +71,7 @@ let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
+let isShuttingDown = false;
 // LID to phone number mapping (WhatsApp now sends LID JIDs for self-chats)
 let lidToPhoneMap: Record<string, string> = {};
 // Guards to prevent duplicate loops on WhatsApp reconnect
@@ -73,6 +83,7 @@ let waConnected = false;
 const outgoingQueue: Array<{ jid: string; text: string }> = [];
 
 const queue = new GroupQueue();
+const typingManager = new TypingManager((jid) => setTyping(jid, true));
 
 /**
  * Translate a JID from LID format to phone format if we have a mapping.
@@ -90,6 +101,10 @@ function translateJid(jid: string): string {
 }
 
 async function setTyping(jid: string, isTyping: boolean): Promise<void> {
+  if (jid.startsWith('tg:')) {
+    if (isTyping) await setTelegramTyping(jid);
+    return;
+  }
   try {
     await sock.sendPresenceUpdate(isTyping ? 'composing' : 'paused', jid);
   } catch (err) {
@@ -184,7 +199,7 @@ function getAvailableGroups(): AvailableGroup[] {
   const registeredJids = new Set(Object.keys(registeredGroups));
 
   return chats
-    .filter((c) => c.jid !== '__group_sync__' && c.jid.endsWith('@g.us'))
+    .filter((c) => c.jid !== '__group_sync__' && (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:')))
     .map((c) => ({
       jid: c.jid,
       name: c.name,
@@ -265,32 +280,46 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await setTyping(chatJid, true);
+  typingManager.start(chatJid);
   let hadError = false;
+  let output: string | undefined;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        await sendMessage(chatJid, `${ASSISTANT_NAME}: ${text}`);
+  try {
+    output = await runAgent(group, prompt, chatJid, async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        // Agent produced output — stop typing while sending, restart after
+        typingManager.stop(chatJid);
+        const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+        if (text) {
+          const prefixed = chatJid.startsWith('tg:') ? text : `${ASSISTANT_NAME}: ${text}`;
+          await sendMessage(chatJid, prefixed);
+        }
+        // Restart typing — agent may produce more output
+        typingManager.start(chatJid);
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
-
-  await setTyping(chatJid, false);
-  if (idleTimer) clearTimeout(idleTimer);
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    });
+  } finally {
+    typingManager.stop(chatJid);
+    if (idleTimer) clearTimeout(idleTimer);
+  }
 
   if (output === 'error' || hadError) {
+    if (isShuttingDown) {
+      // Don't roll back cursor during shutdown — the shutdown handler already
+      // advanced it to "now" to prevent reprocessing stale messages on restart.
+      logger.warn({ group: group.name }, 'Agent error during shutdown, cursor not rolled back');
+      return false;
+    }
     // Roll back cursor so retries can re-process these messages
     lastAgentTimestamp[chatJid] = previousCursor;
     saveState();
@@ -381,6 +410,13 @@ async function runAgent(
 }
 
 async function sendMessage(jid: string, text: string): Promise<void> {
+  // Route Telegram messages directly (no outgoing queue needed)
+  if (jid.startsWith('tg:')) {
+    await sendTelegramMessage(jid, text);
+    return;
+  }
+
+  // WhatsApp path (with outgoing queue for reconnection)
   if (!waConnected) {
     outgoingQueue.push({ jid, text });
     logger.info({ jid, length: text.length, queueSize: outgoingQueue.length }, 'WA disconnected, message queued');
@@ -460,9 +496,10 @@ function startIpcWatcher(): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
+                  const ipcPrefix = data.chatJid.startsWith('tg:') ? '' : `${ASSISTANT_NAME}: `;
                   await sendMessage(
                     data.chatJid,
-                    `${ASSISTANT_NAME}: ${data.text}`,
+                    `${ipcPrefix}${data.text}`,
                   );
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
@@ -950,6 +987,8 @@ async function startMessageLoop(): Promise<void> {
           const formatted = formatMessages(messagesToSend);
 
           if (queue.sendMessage(chatJid, formatted)) {
+            // Show typing indicator while container processes follow-up messages
+            typingManager.start(chatJid);
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -988,58 +1027,34 @@ function recoverPendingMessages(): void {
   }
 }
 
-function ensureContainerSystemRunning(): void {
+function ensureDockerRunning(): void {
   try {
-    execSync('container system status', { stdio: 'pipe' });
-    logger.debug('Apple Container system already running');
+    execSync('docker info', { stdio: 'pipe', timeout: 10000 });
+    logger.debug('Docker daemon is running');
   } catch {
-    logger.info('Starting Apple Container system...');
-    try {
-      execSync('container system start', { stdio: 'pipe', timeout: 30000 });
-      logger.info('Apple Container system started');
-    } catch (err) {
-      logger.error({ err }, 'Failed to start Apple Container system');
-      console.error(
-        '\n╔════════════════════════════════════════════════════════════════╗',
-      );
-      console.error(
-        '║  FATAL: Apple Container system failed to start                 ║',
-      );
-      console.error(
-        '║                                                                ║',
-      );
-      console.error(
-        '║  Agents cannot run without Apple Container. To fix:           ║',
-      );
-      console.error(
-        '║  1. Install from: https://github.com/apple/container/releases ║',
-      );
-      console.error(
-        '║  2. Run: container system start                               ║',
-      );
-      console.error(
-        '║  3. Restart NanoClaw                                          ║',
-      );
-      console.error(
-        '╚════════════════════════════════════════════════════════════════╝\n',
-      );
-      throw new Error('Apple Container system is required but failed to start');
-    }
+    logger.error('Docker daemon is not running');
+    console.error('\n╔════════════════════════════════════════════════════════════════╗');
+    console.error('║  FATAL: Docker is not running                                  ║');
+    console.error('║                                                                ║');
+    console.error('║  Agents cannot run without Docker. To fix:                     ║');
+    console.error('║  macOS: Start Docker Desktop                                   ║');
+    console.error('║  Linux: sudo systemctl start docker                            ║');
+    console.error('║                                                                ║');
+    console.error('║  Install from: https://docker.com/products/docker-desktop      ║');
+    console.error('╚════════════════════════════════════════════════════════════════╝\n');
+    throw new Error('Docker is required but not running');
   }
 
   // Kill and clean up orphaned NanoClaw containers from previous runs
   try {
-    const output = execSync('container ls --format json', {
+    const output = execSync('docker ps --filter "name=nanoclaw-" --format "{{.Names}}"', {
       stdio: ['pipe', 'pipe', 'pipe'],
       encoding: 'utf-8',
     });
-    const containers: { status: string; configuration: { id: string } }[] = JSON.parse(output || '[]');
-    const orphans = containers
-      .filter((c) => c.status === 'running' && c.configuration.id.startsWith('nanoclaw-'))
-      .map((c) => c.configuration.id);
+    const orphans = output.trim().split('\n').filter((n) => n);
     for (const name of orphans) {
       try {
-        execSync(`container stop ${name}`, { stdio: 'pipe' });
+        execSync(`docker stop ${name}`, { stdio: 'pipe' });
       } catch { /* already stopped */ }
     }
     if (orphans.length > 0) {
@@ -1051,7 +1066,7 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
-  ensureContainerSystemRunning();
+  ensureDockerRunning();
   initDatabase();
   logger.info('Database initialized');
   loadState();
@@ -1059,13 +1074,56 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    isShuttingDown = true;
+    stopTelegram();
+    // Advance cursors to now so restart doesn't reprocess old messages
+    const now = new Date().toISOString();
+    for (const chatJid of Object.keys(lastAgentTimestamp)) {
+      lastAgentTimestamp[chatJid] = now;
+    }
+    saveState();
     await queue.shutdown(10000);
+    // Save again after queue shutdown in case an in-flight error handler
+    // ran between our first save and the queue fully stopping
+    for (const chatJid of Object.keys(lastAgentTimestamp)) {
+      lastAgentTimestamp[chatJid] = now;
+    }
+    saveState();
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
-  await connectWhatsApp();
+  // Start Telegram bot if configured
+  const hasTelegram = !!TELEGRAM_BOT_TOKEN;
+  if (hasTelegram) {
+    await connectTelegram(TELEGRAM_BOT_TOKEN, queue, (chatJid: string) => {
+      lastAgentTimestamp[chatJid] = new Date().toISOString();
+      saveState();
+    });
+  }
+
+  if (!TELEGRAM_ONLY) {
+    await connectWhatsApp();
+  } else {
+    // Telegram-only mode: start all services that WhatsApp's connection.open normally starts
+    startSchedulerLoop({
+      registeredGroups: () => registeredGroups,
+      getSessions: () => sessions,
+      queue,
+      onProcess: (groupJid, proc, containerName, groupFolder) =>
+        queue.registerProcess(groupJid, proc, containerName, groupFolder),
+      sendMessage,
+      assistantName: ASSISTANT_NAME,
+    });
+    startIpcWatcher();
+    queue.setProcessMessagesFn(processGroupMessages);
+    recoverPendingMessages();
+    startMessageLoop();
+    logger.info(
+      `NanoClaw running (Telegram-only, trigger: @${ASSISTANT_NAME})`,
+    );
+  }
 }
 
 main().catch((err) => {
