@@ -5,6 +5,8 @@ export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 export const TELEGRAM_ONLY = process.env.TELEGRAM_ONLY === 'true';
+export const MATRIX_ACCESS_TOKEN = process.env.MATRIX_ACCESS_TOKEN || '';
+export const MATRIX_HOMESERVER = process.env.MATRIX_HOMESERVER || 'https://matrix.beeper.com';
 
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
@@ -34,9 +36,9 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
 ); // 10MB default
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(
-  process.env.IDLE_TIMEOUT || '1800000',
+  process.env.IDLE_TIMEOUT || '1500000',
   10,
-); // 30min default — how long to keep container alive after last result
+); // 25min default — must be < CONTAINER_TIMEOUT so clean shutdown beats hard kill
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,

@@ -150,7 +150,10 @@ COPY scripts/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
-RUN chown -R node:node /workspace
+# Also create .config dir so CLIs (obsidian-cli, etc.) can write config
+RUN chown -R node:node /workspace \
+    && mkdir -p /home/node/.config \
+    && chown -R node:node /home/node/.config
 
 # Switch to non-root user (required for --dangerously-skip-permissions)
 USER node

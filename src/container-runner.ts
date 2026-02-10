@@ -138,17 +138,7 @@ function buildVolumeMounts(
     }
   };
 
-  // 1. Copy from container/skills/ (container-specific skills)
-  const containerSkills = path.join(process.cwd(), 'container', 'skills');
-  if (fs.existsSync(containerSkills)) {
-    for (const skillDir of fs.readdirSync(containerSkills)) {
-      const srcDir = path.join(containerSkills, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      copyRecursive(srcDir, path.join(skillsDst, skillDir));
-    }
-  }
-
-  // 2. Copy from .claude/skills/ (project-level skills like setup, debug, customize)
+  // 1. Copy from .claude/skills/ (project-level skills like setup, debug, customize)
   const projectSkills = path.join(process.cwd(), '.claude', 'skills');
   if (fs.existsSync(projectSkills)) {
     for (const skillDir of fs.readdirSync(projectSkills)) {
@@ -158,7 +148,7 @@ function buildVolumeMounts(
     }
   }
 
-  // 3. Copy from ~/.claude/skills/ (global user skills)
+  // 2. Copy from ~/.claude/skills/ (global user skills)
   const globalSkills = path.join(homeDir, '.claude', 'skills');
   if (fs.existsSync(globalSkills)) {
     for (const skillDir of fs.readdirSync(globalSkills)) {
@@ -168,7 +158,7 @@ function buildVolumeMounts(
     }
   }
 
-  // 4. Copy from ~/projects/workflows/skills/ (workflows plugin)
+  // 3. Copy from ~/projects/workflows/skills/ (workflows plugin)
   const workflowsSkills = path.join(homeDir, 'projects', 'workflows', 'skills');
   if (fs.existsSync(workflowsSkills)) {
     for (const skillDir of fs.readdirSync(workflowsSkills)) {
@@ -183,7 +173,7 @@ function buildVolumeMounts(
     }
   }
 
-  // 5. Copy skills from CLI tool projects (superhuman, morgen, etc.)
+  // 4. Copy skills from CLI tool projects (superhuman, morgen, etc.)
   const cliSkillProjects = ['superhuman-cli', 'morgen-cli'];
   for (const project of cliSkillProjects) {
     const projectSkillsDir = path.join(homeDir, 'projects', project, '.claude', 'skills');
@@ -197,6 +187,17 @@ function buildVolumeMounts(
           continue;
         }
       }
+    }
+  }
+
+  // 5. Copy from container/skills/ LAST (container-specific overrides)
+  // These have highest priority — override host-specific skills with container paths
+  const containerSkills = path.join(process.cwd(), 'container', 'skills');
+  if (fs.existsSync(containerSkills)) {
+    for (const skillDir of fs.readdirSync(containerSkills)) {
+      const srcDir = path.join(containerSkills, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      copyRecursive(srcDir, path.join(skillsDst, skillDir));
     }
   }
   mounts.push({

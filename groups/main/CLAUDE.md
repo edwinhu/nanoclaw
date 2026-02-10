@@ -67,6 +67,23 @@ When you learn something important:
 - Add recurring context directly to this CLAUDE.md
 - Always index new memory files at the top of CLAUDE.md
 
+## Obsidian Vaults
+
+**Primary vault:** `/workspace/extra/Notes/Vault`
+**Writing vault:** `/workspace/extra/Notes/Writing`
+
+Use the `/obsidian` skill for full documentation.
+
+**Quick reference:**
+- `obsidian-cli search "query" --vault-path /workspace/extra/Notes/Vault` (search note names)
+- `rg "term" /workspace/extra/Notes/Vault/` (search note content — faster than obsidian-cli)
+- Edit files directly with Read/Edit tools; Obsidian picks up changes automatically
+
+**Daily Notes:**
+- Path: `/workspace/extra/Notes/Vault/3. Resources/Daily Notes/YYYY-MM-DD.md`
+- Template sections: `# To-Dos`, `# Reading`, `# Meetings`, `# Work`
+- To add to today's daily note, read/edit the file directly at the path above
+
 ## Important Dates
 
 - **Rob's birthday**: February 14
@@ -108,7 +125,10 @@ Unless explicitly requested by the user, filter results to show only Calendar an
 
 **Scheduling Intelligence:**
 - Use `--json` flag with `morgen calendar events` to get rich event data (freeBusyStatus, description, etc.)
-- **CRITICAL - JSON timestamps are UTC**: The `--json` output returns UTC times even when `--timezone` is specified. The plain text output converts to ET correctly, but JSON `start` fields are always UTC. Convert manually: subtract 5 hours (EST) or 4 hours (EDT) to get Eastern Time.
+- **CRITICAL - Timezone behavior**:
+  - **Input (create/schedule)**: With `--timezone America/New_York`, input times are interpreted as ET. So pass the actual ET time (e.g., `--start 2026-02-10T11:00:00` for 11 AM ET).
+  - **Plain text output**: With `--timezone America/New_York`, times are displayed in ET. ✅
+  - **JSON output**: `--json` always returns UTC times regardless of `--timezone`. Convert manually: subtract 5 hours (EST) or 4 hours (EDT) to get Eastern Time.
 - **Respect `freeBusyStatus`**: Never schedule over events marked `busy` (unless they are `#morgen-routine` — see below)
 - **`#morgen-routine` events** (identified by `#morgen-routine` in description) are flexible time blocks that CAN be scheduled over:
   - *Eat the Frog* (daily 9-10 AM, Gmail calendar, marked `busy`): Deep/high-focus work block. Schedule **high-focus tasks** here.

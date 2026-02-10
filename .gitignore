@@ -30,3 +30,29 @@ groups/global/*
 .vscode/
 
 agents-sdk-docs
+.worktrees/
+
+# Workflow artifacts
+.claude/PLAN.md
+.claude/SPEC.md
+.claude/ACTIVE_WORKFLOW.md
+
+# Container binaries & local scripts
+container/bin/
+container/scripts/
+
+# Skill symlinks (machine-specific, point to ~/.claude/skills/)
+# Real skill dirs (agent-browser, cdp-apps, librarian, obsidian, obsidian-daily-notes) are tracked
+container/skills/bloomberg-paywall-debugging
+container/skills/browser-automation-cdp-workaround
+container/skills/bun-binary-nix-deployment
+container/skills/emacs
+container/skills/nvim
+container/skills/quarto
+container/skills/vitalsource-highlights-api
+
+# Generated output
+nanobanana-output/
+
+# Local utility scripts
+scripts/

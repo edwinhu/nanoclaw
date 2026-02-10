@@ -54,6 +54,7 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { initMatrixTyping, setMatrixTyping } from './matrix-typing.js';
 import {
   connectTelegram,
   sendTelegramMessage,
@@ -102,7 +103,11 @@ function translateJid(jid: string): string {
 
 async function setTyping(jid: string, isTyping: boolean): Promise<void> {
   if (jid.startsWith('tg:')) {
-    if (isTyping) await setTelegramTyping(jid);
+    // Fire both in parallel — Telegram for native clients, Matrix for Beeper
+    await Promise.allSettled([
+      isTyping ? setTelegramTyping(jid) : Promise.resolve(),
+      setMatrixTyping(jid, isTyping),
+    ]);
     return;
   }
   try {
@@ -276,19 +281,24 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       logger.debug({ group: group.name }, 'Idle timeout, closing container stdin');
+      typingManager.stop(chatJid);
       queue.closeStdin(chatJid);
     }, IDLE_TIMEOUT);
   };
 
   typingManager.start(chatJid);
   let hadError = false;
+  let outputSent = false;
   let output: string | undefined;
 
   try {
     output = await runAgent(group, prompt, chatJid, async (result) => {
-      // Streaming output callback — called for each agent result
+      // Streaming output callback — called for each agent result.
+      // With isSingleUserTurn=false, the SDK query stays open waiting for
+      // piped messages, so type=result means the agent finished this turn
+      // and is now idle. Don't restart typing here — it restarts when new
+      // messages are piped in (startMessageLoop).
       if (result.result) {
-        // Agent produced output — stop typing while sending, restart after
         typingManager.stop(chatJid);
         const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
         // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
@@ -297,11 +307,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         if (text) {
           const prefixed = chatJid.startsWith('tg:') ? text : `${ASSISTANT_NAME}: ${text}`;
           await sendMessage(chatJid, prefixed);
+          outputSent = true;
         }
-        // Restart typing — agent may produce more output
-        typingManager.start(chatJid);
-        // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();
+      } else {
+        // result is null — safety net (e.g. empty result from SDK)
+        typingManager.stop(chatJid);
       }
 
       if (result.status === 'error') {
@@ -318,6 +329,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Don't roll back cursor during shutdown — the shutdown handler already
       // advanced it to "now" to prevent reprocessing stale messages on restart.
       logger.warn({ group: group.name }, 'Agent error during shutdown, cursor not rolled back');
+      return false;
+    }
+    if (outputSent) {
+      // Agent already sent responses — don't re-process old messages.
+      // The error is just a messy container shutdown (e.g. timeout kill after idle).
+      logger.warn({ group: group.name }, 'Agent error after output was sent, cursor NOT rolled back');
       return false;
     }
     // Roll back cursor so retries can re-process these messages
@@ -1102,6 +1119,11 @@ async function main(): Promise<void> {
       saveState();
     });
   }
+
+  // Initialize Matrix typing (non-blocking — falls back to Telegram-only on failure)
+  initMatrixTyping().catch((err) =>
+    logger.warn({ err }, 'Matrix typing init failed'),
+  );
 
   if (!TELEGRAM_ONLY) {
     await connectWhatsApp();
