@@ -76,9 +76,6 @@ RUN ARCH=$(dpkg --print-architecture) \
     && curl -fsSL "https://github.com/Myriad-Dreamin/tinymist/releases/latest/download/tinymist-${A}-unknown-linux-musl.tar.gz" \
        | tar xz -C /usr/local/bin/ \
     && curl -fsSL "https://github.com/medialab/xan/releases/latest/download/xan-${A}-unknown-linux-gnu.tar.gz" \
-       | tar xz -C /usr/local/bin/ \
-    && if [ "$ARCH" = "arm64" ]; then OBS_ARCH="arm64"; else OBS_ARCH="amd64"; fi \
-    && curl -fsSL "https://github.com/Yakitrak/obsidian-cli/releases/latest/download/obsidian-cli_0.2.3_linux_${OBS_ARCH}.tar.gz" \
        | tar xz -C /usr/local/bin/
 
 # Install pixi, uv, bun, and semtools

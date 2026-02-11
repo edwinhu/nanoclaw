@@ -174,7 +174,7 @@ function buildVolumeMounts(
   }
 
   // 4. Copy skills from CLI tool projects (superhuman, morgen, etc.)
-  const cliSkillProjects = ['superhuman-cli', 'morgen-cli'];
+  const cliSkillProjects = ['superhuman-cli', 'morgen-cli', 'readwise-cli', 'obsidian-cli'];
   for (const project of cliSkillProjects) {
     const projectSkillsDir = path.join(homeDir, 'projects', project, '.claude', 'skills');
     if (fs.existsSync(projectSkillsDir)) {

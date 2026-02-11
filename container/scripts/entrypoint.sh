@@ -14,15 +14,33 @@ if [ -d /mnt/projects/morgen-cli ]; then
   bun install --silent >/dev/null 2>&1 || true
   bun build --compile --outfile /home/node/.local/bin/morgen src/cli.ts >/dev/null 2>&1 || true
 fi
+if [ -d /mnt/projects/readwise-cli ]; then
+  cd /mnt/projects/readwise-cli
+  bun install --silent >/dev/null 2>&1 || true
+  bun build --compile --outfile /home/node/.local/bin/readwise src/main.ts >/dev/null 2>&1 || true
+fi
+if [ -d /mnt/projects/obsidian-cli ]; then
+  cd /mnt/projects/obsidian-cli
+  bun install --silent >/dev/null 2>&1 || true
+  bun build --compile --outfile /home/node/.local/bin/obsidian src/cli.ts >/dev/null 2>&1 || true
+fi
 
 # Load environment
 [ -f /workspace/env-dir/env ] && export $(cat /workspace/env-dir/env | xargs)
 
-# Refresh Superhuman tokens via CDP (if Superhuman is running on host)
+# Refresh CLI tokens via CDP (headless Chrome running on host)
+export CDP_HOST="${CDP_HOST:-host.docker.internal}"
+export CDP_PORT="${CDP_PORT:-9400}"
 if command -v superhuman >/dev/null 2>&1; then
-  export CDP_HOST="${CDP_HOST:-host.docker.internal}"
   superhuman account auth 2>/dev/null || true
 fi
+if command -v morgen >/dev/null 2>&1; then
+  morgen auth 2>/dev/null || true
+fi
+
+# Set Obsidian proxy env vars (server runs on host)
+export OBSIDIAN_HOST="${OBSIDIAN_HOST:-host.docker.internal}"
+export OBSIDIAN_PORT="${OBSIDIAN_PORT:-9444}"
 
 # Compile and run agent
 cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2
