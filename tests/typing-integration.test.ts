@@ -57,12 +57,15 @@ describe('TypingManager integration in index.ts', () => {
     expect(pipedSection).not.toBeNull();
   });
 
-  it('restarts typing after sending agent output', () => {
-    // After sending a message, typing should restart for continued processing
-    // Pattern: sendMessage followed by typingManager.start (within the streaming callback)
-    const streamingSection = indexSource.match(
-      /await\s+sendMessage\(chatJid,[\s\S]{0,200}typingManager\.start\(chatJid\)/,
+  it('does NOT restart typing after sending agent output', () => {
+    // With isSingleUserTurn=false, the SDK query stays open. After type=result,
+    // the agent is idle waiting for piped messages. Typing should NOT restart.
+    // Typing only restarts when new messages are piped in (startMessageLoop).
+    const outputSection = indexSource.match(
+      /await\s+sendMessage\(chatJid,[\s\S]{0,300}resetIdleTimer/,
     );
-    expect(streamingSection).not.toBeNull();
+    expect(outputSection).not.toBeNull();
+    // Ensure no typingManager.start between sendMessage and resetIdleTimer
+    expect(outputSection![0]).not.toMatch(/typingManager\.start/);
   });
 });
