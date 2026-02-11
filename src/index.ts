@@ -56,6 +56,7 @@ import { GroupQueue } from './group-queue.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { initMatrixTyping, setMatrixTyping } from './matrix-typing.js';
 import {
+  cancelTelegramTyping,
   connectTelegram,
   sendTelegramMessage,
   setTelegramTyping,
@@ -84,7 +85,11 @@ let waConnected = false;
 const outgoingQueue: Array<{ jid: string; text: string }> = [];
 
 const queue = new GroupQueue();
-const typingManager = new TypingManager((jid) => setTyping(jid, true));
+const typingManager = new TypingManager(
+  (jid) => setTyping(jid, true),
+  4000,
+  (jid) => setTyping(jid, false),
+);
 
 /**
  * Translate a JID from LID format to phone format if we have a mapping.
@@ -103,11 +108,13 @@ function translateJid(jid: string): string {
 
 async function setTyping(jid: string, isTyping: boolean): Promise<void> {
   if (jid.startsWith('tg:')) {
-    // Fire both in parallel — Telegram for native clients, Matrix for Beeper
-    await Promise.allSettled([
-      isTyping ? setTelegramTyping(jid) : Promise.resolve(),
-      setMatrixTyping(jid, isTyping),
-    ]);
+    // Telegram sendChatAction — the Beeper bridge relays this as ghost typing
+    // in Matrix. We don't send Matrix typing directly because it would be as
+    // @edwinhu (invisible to ourselves). The bridge handles the ghost typing.
+    if (isTyping) await setTelegramTyping(jid);
+    // Cancel typing via Telegram API — bridge relays ghost STOPPED to Matrix,
+    // which resets Beeper's ~10s client-side typing indicator timer
+    else await cancelTelegramTyping(jid);
     return;
   }
   try {
@@ -1082,7 +1089,38 @@ function ensureDockerRunning(): void {
   }
 }
 
+function acquireLock(): void {
+  const lockFile = path.join(DATA_DIR, 'nanoclaw.pid');
+  // Check for stale lock
+  if (fs.existsSync(lockFile)) {
+    const pid = parseInt(fs.readFileSync(lockFile, 'utf-8').trim(), 10);
+    try {
+      process.kill(pid, 0); // Check if process is alive (signal 0 = no-op)
+      logger.error({ pid }, 'Another NanoClaw instance is already running');
+      process.exit(1);
+    } catch {
+      // Process doesn't exist — stale lockfile
+      logger.warn({ pid }, 'Removing stale lockfile');
+    }
+  }
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(lockFile, String(process.pid));
+}
+
+function releaseLock(): void {
+  const lockFile = path.join(DATA_DIR, 'nanoclaw.pid');
+  try {
+    const pid = parseInt(fs.readFileSync(lockFile, 'utf-8').trim(), 10);
+    if (pid === process.pid) {
+      fs.unlinkSync(lockFile);
+    }
+  } catch {
+    // Ignore — lockfile may already be gone
+  }
+}
+
 async function main(): Promise<void> {
+  acquireLock();
   ensureDockerRunning();
   initDatabase();
   logger.info('Database initialized');
@@ -1106,22 +1144,26 @@ async function main(): Promise<void> {
       lastAgentTimestamp[chatJid] = now;
     }
     saveState();
+    releaseLock();
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
   // Start Telegram bot if configured
+  let telegramBotId: string | undefined;
   const hasTelegram = !!TELEGRAM_BOT_TOKEN;
   if (hasTelegram) {
-    await connectTelegram(TELEGRAM_BOT_TOKEN, queue, (chatJid: string) => {
+    const tg = await connectTelegram(TELEGRAM_BOT_TOKEN, queue, (chatJid: string) => {
       lastAgentTimestamp[chatJid] = new Date().toISOString();
       saveState();
     });
+    telegramBotId = tg.botId;
   }
 
   // Initialize Matrix typing (non-blocking — falls back to Telegram-only on failure)
-  initMatrixTyping().catch((err) =>
+  // Pass bot ID so DM rooms can be resolved (bridge sees bot as ghost peer)
+  initMatrixTyping(telegramBotId).catch((err) =>
     logger.warn({ err }, 'Matrix typing init failed'),
   );
 

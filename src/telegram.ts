@@ -42,7 +42,7 @@ export async function connectTelegram(
   botToken: string,
   queue?: GroupQueue,
   advanceCursor?: (chatJid: string) => void,
-): Promise<void> {
+): Promise<{ botId: string }> {
   bot = new Bot(botToken);
   if (queue) queueRef = queue;
   if (advanceCursor) advanceCursorFn = advanceCursor;
@@ -181,6 +181,9 @@ export async function connectTelegram(
     logger.error({ err: err.message }, 'Telegram bot error');
   });
 
+  // Get bot info before starting (needed for Matrix room mapping)
+  const me = await bot.api.getMe();
+
   // Start polling
   bot.start({
     onStart: (botInfo) => {
@@ -194,6 +197,8 @@ export async function connectTelegram(
       );
     },
   });
+
+  return { botId: String(me.id) };
 }
 
 /** Convert standard Markdown to Telegram-compatible HTML. */
@@ -285,6 +290,18 @@ export async function setTelegramTyping(chatId: string): Promise<void> {
     logger.info({ chatId }, 'Telegram typing indicator sent');
   } catch (err) {
     logger.debug({ chatId, err }, 'Failed to send Telegram typing indicator');
+  }
+}
+
+export async function cancelTelegramTyping(chatId: string): Promise<void> {
+  if (!bot) return;
+  try {
+    const numericId = chatId.replace(/^tg:/, '');
+    // 'cancel' is undocumented but works — clears the typing indicator
+    await bot.api.sendChatAction(numericId, 'cancel' as 'typing');
+    logger.debug({ chatId }, 'Telegram typing cancelled');
+  } catch (err) {
+    logger.debug({ chatId, err }, 'Failed to cancel Telegram typing');
   }
 }
 
