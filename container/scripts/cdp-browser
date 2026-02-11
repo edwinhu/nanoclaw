@@ -5,11 +5,12 @@
 
 HOST_IP="host.docker.internal"  # Docker networking to reach host
 
-# App configurations
+# App configurations — all served by headless Chrome on host (port 9400)
+CDP_DEFAULT="${CDP_PORT:-9400}"
 declare -A CDP_PORTS=(
-  [superhuman]=9333
-  [morgen]=9223
-  [chrome]=9222
+  [superhuman]=$CDP_DEFAULT
+  [morgen]=$CDP_DEFAULT
+  [chrome]=$CDP_DEFAULT
 )
 
 APP="${1:-superhuman}"
@@ -30,10 +31,10 @@ check_connection() {
   if ! curl -s --connect-timeout 2 -H "Host: localhost" "${CDP_URL}/json/version" > /dev/null 2>&1; then
     echo "ERROR: Cannot reach ${APP} CDP endpoint at ${CDP_URL}"
     echo ""
-    echo "Make sure ${APP} is running with --remote-debugging-port=${CDP_PORT}"
+    echo "Make sure headless Chrome is running on port ${CDP_PORT}"
     echo ""
     echo "On host machine, run:"
-    echo "  ~/projects/nanoclaw/scripts/launch-${APP}-cdp.sh"
+    echo "  nanoclaw-chrome start"
     return 1
   fi
   return 0
