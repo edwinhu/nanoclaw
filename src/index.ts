@@ -1052,21 +1052,30 @@ function recoverPendingMessages(): void {
 }
 
 function ensureDockerRunning(): void {
-  try {
-    execSync('docker info', { stdio: 'pipe', timeout: 10000 });
-    logger.debug('Docker daemon is running');
-  } catch {
-    logger.error('Docker daemon is not running');
-    console.error('\n╔════════════════════════════════════════════════════════════════╗');
-    console.error('║  FATAL: Docker is not running                                  ║');
-    console.error('║                                                                ║');
-    console.error('║  Agents cannot run without Docker. To fix:                     ║');
-    console.error('║  macOS: Start Docker Desktop                                   ║');
-    console.error('║  Linux: sudo systemctl start docker                            ║');
-    console.error('║                                                                ║');
-    console.error('║  Install from: https://docker.com/products/docker-desktop      ║');
-    console.error('╚════════════════════════════════════════════════════════════════╝\n');
-    throw new Error('Docker is required but not running');
+  const maxRetries = 12; // 60 seconds total
+  const retryInterval = 5000;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      execSync('docker info', { stdio: 'pipe', timeout: 10000 });
+      logger.debug('Docker daemon is running');
+      break;
+    } catch {
+      if (attempt === 1) {
+        logger.info('Docker not ready, launching Docker Desktop...');
+        try {
+          execSync('open -gja Docker', { stdio: 'pipe', timeout: 5000 });
+        } catch (e) {
+          logger.warn({ err: e }, 'Failed to launch Docker Desktop');
+        }
+      }
+      if (attempt === maxRetries) {
+        logger.error('Docker daemon failed to start after 60s');
+        throw new Error('Docker is required but not running');
+      }
+      logger.info({ attempt, maxRetries }, 'Waiting for Docker daemon...');
+      execSync(`sleep ${retryInterval / 1000}`);
+    }
   }
 
   // Kill and clean up orphaned NanoClaw containers from previous runs
