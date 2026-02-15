@@ -2,6 +2,9 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import { WhatsAppChannel } from './channels/whatsapp.js';
+import { TelegramChannel } from './channels/telegram.js';
+import { startCompanionMonitor } from './companion-monitor.js';
 import {
   ASSISTANT_NAME,
   DATA_DIR,
@@ -12,8 +15,6 @@ import {
   TELEGRAM_ONLY,
   TRIGGER_PATTERN,
 } from './config.js';
-import { WhatsAppChannel } from './channels/whatsapp.js';
-import { TelegramChannel } from './channels/telegram.js';
 import {
   AvailableGroup,
   ContainerOutput,
@@ -35,15 +36,14 @@ import {
   setSession,
   storeMessage,
 } from './db.js';
-import { startCompanionMonitor } from './companion-monitor.js';
 import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
+import { logger } from './logger.js';
+import { initMatrixTyping } from './matrix-typing.js';
 import { findChannel, formatMessages, formatOutbound, routeOutbound, stripInternalTags } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { initMatrixTyping } from './matrix-typing.js';
-import { TypingManager } from './typing.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
-import { logger } from './logger.js';
+import { TypingManager } from './typing.js';
 
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
@@ -107,8 +107,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (!group) return true;
 
   const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
-  const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
-  const missedMessages = getMessagesSince(chatJid, sinceTimestamp, ASSISTANT_NAME);
+  const previousCursor = lastAgentTimestamp[chatJid] || '';
+  const missedMessages = getMessagesSince(chatJid, previousCursor, ASSISTANT_NAME);
 
   if (missedMessages.length === 0) return true;
 
@@ -118,8 +118,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const prompt = formatMessages(missedMessages);
-
-  const previousCursor = lastAgentTimestamp[chatJid] || '';
   lastAgentTimestamp[chatJid] = missedMessages[missedMessages.length - 1].timestamp;
   saveState();
 
@@ -141,8 +139,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   try {
     await runAgent(group, prompt, chatJid, async (result) => {
+      typingManager.stop(chatJid);
+
       if (result.result) {
-        typingManager.stop(chatJid);
         const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
         const text = stripInternalTags(raw);
         logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
@@ -152,8 +151,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           outputSent = true;
         }
         resetIdleTimer();
-      } else {
-        typingManager.stop(chatJid);
       }
 
       if (result.status === 'error') {
@@ -210,12 +207,14 @@ async function runAgent(
   const availableGroups = getAvailableGroups();
   writeGroupsSnapshot(group.folder, isMain, availableGroups, new Set(Object.keys(registeredGroups)));
 
+  function saveSession(sessionId: string): void {
+    sessions[group.folder] = sessionId;
+    setSession(group.folder, sessionId);
+  }
+
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
-        }
+        if (output.newSessionId) saveSession(output.newSessionId);
         await onOutput(output);
       }
     : undefined;
@@ -228,10 +227,7 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
-    }
+    if (output.newSessionId) saveSession(output.newSessionId);
 
     if (output.status === 'error') {
       logger.error({ group: group.name, error: output.error }, 'Container agent error');
@@ -267,12 +263,9 @@ async function startMessageLoop(): Promise<void> {
 
         const messagesByGroup = new Map<string, NewMessage[]>();
         for (const msg of messages) {
-          const existing = messagesByGroup.get(msg.chat_jid);
-          if (existing) {
-            existing.push(msg);
-          } else {
-            messagesByGroup.set(msg.chat_jid, [msg]);
-          }
+          const group = messagesByGroup.get(msg.chat_jid);
+          if (group) group.push(msg);
+          else messagesByGroup.set(msg.chat_jid, [msg]);
         }
 
         for (const [chatJid, groupMessages] of messagesByGroup) {
@@ -401,24 +394,23 @@ async function main(): Promise<void> {
   loadState();
 
   // Graceful shutdown handlers
-  const shutdown = async (signal: string) => {
-    logger.info({ signal }, 'Shutdown signal received');
-    isShuttingDown = true;
-    // Disconnect all channels
-    for (const ch of channels) {
-      await ch.disconnect().catch(() => {});
-    }
-    // Advance cursors to now so restart doesn't reprocess old messages
+  const advanceAllCursors = () => {
     const now = new Date().toISOString();
     for (const chatJid of Object.keys(lastAgentTimestamp)) {
       lastAgentTimestamp[chatJid] = now;
     }
     saveState();
-    await queue.shutdown(10000);
-    for (const chatJid of Object.keys(lastAgentTimestamp)) {
-      lastAgentTimestamp[chatJid] = now;
+  };
+
+  const shutdown = async (signal: string) => {
+    logger.info({ signal }, 'Shutdown signal received');
+    isShuttingDown = true;
+    for (const ch of channels) {
+      await ch.disconnect().catch(() => {});
     }
-    saveState();
+    advanceAllCursors();
+    await queue.shutdown(10000);
+    advanceAllCursors();
     releaseLock();
     process.exit(0);
   };
@@ -478,7 +470,6 @@ async function main(): Promise<void> {
       registeredGroups: () => registeredGroups,
       registerGroup,
       syncGroupMetadata: async (force: boolean) => {
-        // Find WhatsApp channel and sync if available
         const wa = channels.find((ch) => ch.name === 'WhatsApp') as WhatsAppChannel | undefined;
         if (wa) await wa.syncGroupMetadata(force);
       },
@@ -494,8 +485,13 @@ async function main(): Promise<void> {
   if (!TELEGRAM_ONLY) {
     const whatsapp = new WhatsAppChannel({
       onConnectionOpen: startServices,
-      onMessage: (_chatJid, msg, isFromMe, pushName) => {
-        storeMessage(msg, _chatJid, isFromMe, pushName);
+      onMessage: (chatJid, msg, isFromMe, pushName) => {
+        const content =
+          msg.message?.conversation ||
+          msg.message?.extendedTextMessage?.text ||
+          '';
+        const isBotMessage = isFromMe && content.startsWith(`${ASSISTANT_NAME}:`);
+        storeMessage(msg, chatJid, isFromMe, pushName, isBotMessage);
       },
       registeredGroups: () => registeredGroups,
     });

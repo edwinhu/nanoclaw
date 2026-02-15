@@ -20,9 +20,9 @@ import {
   updateTask,
 } from './db.js';
 import { logger } from './logger.js';
+import { findChannel, formatOutbound } from './router.js';
 import { Channel, RegisteredGroup } from './types.js';
 import { TypingManager } from './typing.js';
-import { findChannel, formatOutbound } from './router.js';
 
 export interface IpcDeps {
   channels: Channel[];
@@ -33,8 +33,33 @@ export interface IpcDeps {
   typingManager: TypingManager;
 }
 
+/** Process all .json files in a directory, moving failures to an error directory. */
+async function processIpcDir(
+  dir: string,
+  sourceGroup: string,
+  errorDir: string,
+  handler: (data: any) => Promise<void>,
+): Promise<void> {
+  if (!fs.existsSync(dir)) return;
+
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+  for (const file of files) {
+    const filePath = path.join(dir, file);
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      await handler(data);
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      logger.error({ file, sourceGroup, err }, 'Error processing IPC file');
+      fs.mkdirSync(errorDir, { recursive: true });
+      fs.renameSync(filePath, path.join(errorDir, `${sourceGroup}-${file}`));
+    }
+  }
+}
+
 export function startIpcWatcher(deps: IpcDeps): void {
   const ipcBaseDir = path.join(DATA_DIR, 'ipc');
+  const errorDir = path.join(ipcBaseDir, 'errors');
   fs.mkdirSync(ipcBaseDir, { recursive: true });
 
   const processIpcFiles = async () => {
@@ -52,77 +77,44 @@ export function startIpcWatcher(deps: IpcDeps): void {
 
     for (const sourceGroup of groupFolders) {
       const isMain = sourceGroup === MAIN_GROUP_FOLDER;
-      const messagesDir = path.join(ipcBaseDir, sourceGroup, 'messages');
-      const tasksDir = path.join(ipcBaseDir, sourceGroup, 'tasks');
 
-      // Process messages
-      try {
-        if (fs.existsSync(messagesDir)) {
-          const messageFiles = fs
-            .readdirSync(messagesDir)
-            .filter((f) => f.endsWith('.json'));
-          for (const file of messageFiles) {
-            const filePath = path.join(messagesDir, file);
-            try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
-                const groups = deps.registeredGroups();
-                const targetGroup = groups[data.chatJid];
-                if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
-                  deps.typingManager.stop(data.chatJid);
-                  const formatted = formatOutbound(data.chatJid, data.text);
-                  const channel = findChannel(deps.channels, data.chatJid);
-                  if (channel) {
-                    await channel.sendMessage(data.chatJid, formatted);
-                  }
-                  logger.info({ chatJid: data.chatJid, sourceGroup }, 'IPC message sent');
-                } else {
-                  logger.warn({ chatJid: data.chatJid, sourceGroup }, 'Unauthorized IPC message attempt blocked');
-                }
-              }
-              fs.unlinkSync(filePath);
-            } catch (err) {
-              logger.error({ file, sourceGroup, err }, 'Error processing IPC message');
-              const errorDir = path.join(ipcBaseDir, 'errors');
-              fs.mkdirSync(errorDir, { recursive: true });
-              fs.renameSync(filePath, path.join(errorDir, `${sourceGroup}-${file}`));
-            }
-          }
-        }
-      } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC messages directory');
-      }
+      await processIpcDir(
+        path.join(ipcBaseDir, sourceGroup, 'messages'),
+        sourceGroup,
+        errorDir,
+        async (data) => {
+          if (data.type !== 'message' || !data.chatJid || !data.text) return;
 
-      // Process tasks
-      try {
-        if (fs.existsSync(tasksDir)) {
-          const taskFiles = fs
-            .readdirSync(tasksDir)
-            .filter((f) => f.endsWith('.json'));
-          for (const file of taskFiles) {
-            const filePath = path.join(tasksDir, file);
-            try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              await processTaskIpc(data, sourceGroup, isMain, deps);
-              fs.unlinkSync(filePath);
-            } catch (err) {
-              logger.error({ file, sourceGroup, err }, 'Error processing IPC task');
-              const errorDir = path.join(ipcBaseDir, 'errors');
-              fs.mkdirSync(errorDir, { recursive: true });
-              fs.renameSync(filePath, path.join(errorDir, `${sourceGroup}-${file}`));
-            }
+          const groups = deps.registeredGroups();
+          const targetGroup = groups[data.chatJid];
+          if (!isMain && (!targetGroup || targetGroup.folder !== sourceGroup)) {
+            logger.warn({ chatJid: data.chatJid, sourceGroup }, 'Unauthorized IPC message attempt blocked');
+            return;
           }
-        }
-      } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
-      }
+
+          deps.typingManager.stop(data.chatJid);
+          const formatted = formatOutbound(data.chatJid, data.text);
+          const channel = findChannel(deps.channels, data.chatJid);
+          if (channel) {
+            await channel.sendMessage(data.chatJid, formatted);
+          }
+          logger.info({ chatJid: data.chatJid, sourceGroup }, 'IPC message sent');
+        },
+      );
+
+      await processIpcDir(
+        path.join(ipcBaseDir, sourceGroup, 'tasks'),
+        sourceGroup,
+        errorDir,
+        (data) => processTaskIpc(data, sourceGroup, isMain, deps),
+      );
     }
 
     setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
   };
 
   processIpcFiles();
-  logger.info('IPC watcher started (per-group namespaces)');
+  logger.info('IPC watcher started');
 }
 
 async function processTaskIpc(
@@ -140,6 +132,7 @@ async function processTaskIpc(
     name?: string;
     folder?: string;
     trigger?: string;
+    requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
     sessionId?: string;
     taskTitle?: string;
@@ -152,7 +145,7 @@ async function processTaskIpc(
   switch (data.type) {
     case 'schedule_task':
       if (data.prompt && data.schedule_type && data.schedule_value && data.targetJid) {
-        const targetJid = data.targetJid as string;
+        const targetJid = data.targetJid;
         const groups = deps.registeredGroups();
         const targetGroupEntry = groups[targetJid];
 
@@ -217,40 +210,22 @@ async function processTaskIpc(
       break;
 
     case 'pause_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
-          updateTask(data.taskId, { status: 'paused' });
-          logger.info({ taskId: data.taskId, sourceGroup }, 'Task paused via IPC');
-        } else {
-          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task pause attempt');
-        }
-      }
-      break;
-
     case 'resume_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
-          updateTask(data.taskId, { status: 'active' });
-          logger.info({ taskId: data.taskId, sourceGroup }, 'Task resumed via IPC');
-        } else {
-          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task resume attempt');
-        }
+    case 'cancel_task': {
+      if (!data.taskId) break;
+      const task = getTaskById(data.taskId);
+      if (!task || (!isMain && task.group_folder !== sourceGroup)) {
+        logger.warn({ taskId: data.taskId, sourceGroup }, `Unauthorized task ${data.type} attempt`);
+        break;
       }
-      break;
-
-    case 'cancel_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
-          deleteTask(data.taskId);
-          logger.info({ taskId: data.taskId, sourceGroup }, 'Task cancelled via IPC');
-        } else {
-          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task cancel attempt');
-        }
+      if (data.type === 'cancel_task') {
+        deleteTask(data.taskId);
+      } else {
+        updateTask(data.taskId, { status: data.type === 'pause_task' ? 'paused' : 'active' });
       }
+      logger.info({ taskId: data.taskId, sourceGroup }, `Task ${data.type.replace('_task', '')}d via IPC`);
       break;
+    }
 
     case 'refresh_groups':
       if (isMain) {
@@ -274,6 +249,7 @@ async function processTaskIpc(
           name: data.name,
           folder: data.folder,
           trigger: data.trigger,
+          requiresTrigger: data.requiresTrigger,
           added_at: new Date().toISOString(),
           containerConfig: data.containerConfig,
         });
@@ -289,10 +265,10 @@ async function processTaskIpc(
       }
       if (data.sessionId && data.taskTitle && data.projectDir && data.chatJid) {
         registerCompanionSession({
-          session_id: data.sessionId as string,
-          task_title: data.taskTitle as string,
-          project_dir: data.projectDir as string,
-          chat_jid: data.chatJid as string,
+          session_id: data.sessionId,
+          task_title: data.taskTitle,
+          project_dir: data.projectDir,
+          chat_jid: data.chatJid,
         });
         logger.info(
           { sessionId: data.sessionId, taskTitle: data.taskTitle, sourceGroup },

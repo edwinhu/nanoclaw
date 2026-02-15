@@ -1,13 +1,14 @@
+import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
 
 import makeWASocket, {
+  Browsers,
   DisconnectReason,
-  WASocket,
   makeCacheableSignalKeyStore,
-  useMultiFileAuthState,
   proto,
+  useMultiFileAuthState,
+  WASocket,
 } from '@whiskeysockets/baileys';
 
 import { STORE_DIR } from '../config.js';
@@ -52,7 +53,7 @@ export class WhatsAppChannel implements Channel {
       },
       printQRInTerminal: false,
       logger,
-      browser: ['NanoClaw', 'Chrome', '1.0.0'],
+      browser: Browsers.macOS('Chrome'),
     });
 
     this.sock.ev.on('connection.update', (update) => {
@@ -91,7 +92,6 @@ export class WhatsAppChannel implements Channel {
         this.connected = true;
         logger.info('Connected to WhatsApp');
 
-        // Build LID to phone mapping from auth state for self-chat translation
         if (this.sock.user) {
           const phoneUser = this.sock.user.id.split(':')[0];
           const lidUser = this.sock.user.lid?.split(':')[0];
@@ -101,16 +101,16 @@ export class WhatsAppChannel implements Channel {
           }
         }
 
-        // Flush any messages queued while disconnected
+        this.sock.sendPresenceUpdate('available').catch(() => {});
+
         this.flushOutgoingQueue().catch((err) =>
           logger.error({ err }, 'Failed to flush outgoing queue'),
         );
 
-        // Sync group metadata on startup (respects 24h cache)
         this.syncGroupMetadata().catch((err) =>
           logger.error({ err }, 'Initial group sync failed'),
         );
-        // Set up daily sync timer (only once)
+
         if (!this.groupSyncTimerStarted) {
           this.groupSyncTimerStarted = true;
           setInterval(() => {
@@ -126,23 +126,19 @@ export class WhatsAppChannel implements Channel {
 
     this.sock.ev.on('creds.update', saveCreds);
 
-    this.sock.ev.on('messages.upsert', ({ messages }) => {
+    this.sock.ev.on('messages.upsert', async ({ messages }) => {
       for (const msg of messages) {
         if (!msg.message) continue;
         const rawJid = msg.key.remoteJid;
         if (!rawJid || rawJid === 'status@broadcast') continue;
 
-        // Translate LID JID to phone JID if applicable
-        const chatJid = this.translateJid(rawJid);
-
+        const chatJid = await this.translateJid(rawJid);
         const timestamp = new Date(
           Number(msg.messageTimestamp) * 1000,
         ).toISOString();
 
-        // Always store chat metadata for group discovery
         storeChatMetadata(chatJid, timestamp);
 
-        // Only deliver full message content for registered groups
         const groups = this.deps.registeredGroups();
         if (groups[chatJid]) {
           this.deps.onMessage(chatJid, msg, msg.key.fromMe || false, msg.pushName || undefined);
@@ -217,14 +213,30 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
-  private translateJid(jid: string): string {
+  private async translateJid(jid: string): Promise<string> {
     if (!jid.endsWith('@lid')) return jid;
     const lidUser = jid.split('@')[0].split(':')[0];
-    const phoneJid = this.lidToPhoneMap[lidUser];
-    if (phoneJid) {
-      logger.debug({ lidJid: jid, phoneJid }, 'Translated LID to phone JID');
-      return phoneJid;
+
+    // Check cached LID→phone map first
+    const cached = this.lidToPhoneMap[lidUser];
+    if (cached) {
+      logger.debug({ lidJid: jid, phoneJid: cached }, 'Translated LID via cache');
+      return cached;
     }
+
+    // Try signal repository lookup
+    try {
+      const pn = await this.sock.signalRepository.lidMapping.getPNForLID(jid);
+      if (pn) {
+        const phoneJid = pn.split(':')[0] + '@s.whatsapp.net';
+        this.lidToPhoneMap[lidUser] = phoneJid;
+        logger.debug({ lidJid: jid, phoneJid }, 'Translated LID via signalRepository');
+        return phoneJid;
+      }
+    } catch (err) {
+      logger.debug({ lidJid: jid, err }, 'signalRepository LID lookup failed');
+    }
+
     return jid;
   }
 

@@ -397,6 +397,21 @@ async function runQuery(
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 
+  // Scan /workspace/extra/* for additional directories (e.g. mounted project dirs)
+  // so their CLAUDE.md files are picked up automatically by the SDK
+  const extraDirs: string[] = [];
+  const extraBase = '/workspace/extra';
+  if (fs.existsSync(extraBase)) {
+    for (const entry of fs.readdirSync(extraBase, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        extraDirs.push(path.join(extraBase, entry.name));
+      }
+    }
+    if (extraDirs.length > 0) {
+      log(`Found ${extraDirs.length} additional directories: ${extraDirs.join(', ')}`);
+    }
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -404,6 +419,7 @@ async function runQuery(
       cwd: '/workspace/group',
       resume: sessionId,
       resumeSessionAt: resumeAt,
+      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,

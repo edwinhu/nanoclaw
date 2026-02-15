@@ -80,11 +80,7 @@ export class TelegramChannel implements Channel {
       const chatId = `tg:${ctx.chat.id}`;
       let content = ctx.message.text;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
-      const senderName =
-        ctx.from?.first_name ||
-        ctx.from?.username ||
-        ctx.from?.id.toString() ||
-        'Unknown';
+      const senderName = TelegramChannel.senderName(ctx.from);
       const sender = ctx.from?.id.toString() || '';
       const msgId = ctx.message.message_id.toString();
 
@@ -97,15 +93,11 @@ export class TelegramChannel implements Channel {
       const botUsername = ctx.me?.username?.toLowerCase();
       if (botUsername) {
         const entities = ctx.message.entities || [];
-        const isBotMentioned = entities.some((entity) => {
-          if (entity.type === 'mention') {
-            const mentionText = content
-              .substring(entity.offset, entity.offset + entity.length)
-              .toLowerCase();
-            return mentionText === `@${botUsername}`;
-          }
-          return false;
-        });
+        const isBotMentioned = entities.some(
+          (e) =>
+            e.type === 'mention' &&
+            content.substring(e.offset, e.offset + e.length).toLowerCase() === `@${botUsername}`,
+        );
         if (isBotMentioned && !TRIGGER_PATTERN.test(content)) {
           content = `@${ASSISTANT_NAME} ${content}`;
         }
@@ -233,14 +225,17 @@ export class TelegramChannel implements Channel {
     return this.botId;
   }
 
+  private static senderName(from: any): string {
+    return from?.first_name || from?.username || from?.id?.toString() || 'Unknown';
+  }
+
   private storeNonTextMessage(ctx: any, placeholder: string): void {
     const chatId = `tg:${ctx.chat.id}`;
     const registeredGroups = getAllRegisteredGroups();
     if (!registeredGroups[chatId]) return;
 
     const timestamp = new Date(ctx.message.date * 1000).toISOString();
-    const senderName =
-      ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+    const senderName = TelegramChannel.senderName(ctx.from);
     const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
     storeChatMetadata(chatId, timestamp);
