@@ -39,6 +39,7 @@ export interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  secrets?: Record<string, string>;
 }
 
 export interface ContainerOutput {
@@ -218,43 +219,8 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Environment file directory (keeps credentials out of process listings)
-  // Only expose specific auth variables needed by Claude Code, not the entire .env
-  const envDir = path.join(DATA_DIR, 'env');
-  fs.mkdirSync(envDir, { recursive: true });
-  const envFile = path.join(projectRoot, '.env');
-  if (fs.existsSync(envFile)) {
-    const envContent = fs.readFileSync(envFile, 'utf-8');
-    const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
-    const filteredLines = envContent.split('\n').filter((line) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return false;
-      return allowedVars.some((v) => trimmed.startsWith(`${v}=`));
-    });
-
-    // Also inject Readwise token if available (for librarian skill)
-    const readwiseTokenPath = '/var/folders/01/wzs3mqmn3jx2b81f0dcq9w8h0000gq/T/agenix/readwise-token';
-    try {
-      const readwiseToken = fs.readFileSync(readwiseTokenPath, 'utf-8').trim();
-      if (readwiseToken) {
-        filteredLines.push(`READWISE_TOKEN=${readwiseToken}`);
-      }
-    } catch {
-      // Readwise token not available, skip
-    }
-
-    if (filteredLines.length > 0) {
-      fs.writeFileSync(
-        path.join(envDir, 'env'),
-        filteredLines.join('\n') + '\n',
-      );
-      mounts.push({
-        hostPath: envDir,
-        containerPath: '/workspace/env-dir',
-        readonly: true,
-      });
-    }
-  }
+  // Secrets are passed via input JSON (not mounted as files)
+  // See readSecrets() — called in runContainerAgent()
 
   // Mount agent-runner source from host — recompiled on container startup.
   // Bypasses Docker's build cache for code changes.
@@ -316,6 +282,49 @@ function buildVolumeMounts(
   }
 
   return mounts;
+}
+
+/**
+ * Read allowed secrets from .env for passing to the container via input JSON.
+ * Secrets are never written to disk or mounted as files — they travel in the
+ * stdin JSON and are consumed by the agent-runner via SDK env option.
+ */
+function readSecrets(): Record<string, string> {
+  const envFile = path.join(process.cwd(), '.env');
+  if (!fs.existsSync(envFile)) return {};
+
+  const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+  const secrets: Record<string, string> = {};
+  const content = fs.readFileSync(envFile, 'utf-8');
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    if (!allowedVars.includes(key)) continue;
+    let value = trimmed.slice(eqIdx + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (value) secrets[key] = value;
+  }
+
+  // Also inject Readwise token if available (for librarian skill)
+  const readwiseTokenPath =
+    '/var/folders/01/wzs3mqmn3jx2b81f0dcq9w8h0000gq/T/agenix/readwise-token';
+  try {
+    const readwiseToken = fs.readFileSync(readwiseTokenPath, 'utf-8').trim();
+    if (readwiseToken) secrets['READWISE_TOKEN'] = readwiseToken;
+  } catch {
+    // Readwise token not available, skip
+  }
+
+  return secrets;
 }
 
 function buildContainerArgs(mounts: VolumeMount[], containerName: string): string[] {
@@ -381,8 +390,12 @@ export async function runContainerAgent(
   fs.mkdirSync(logsDir, { recursive: true });
 
   // Write input to IPC directory (read by entrypoint instead of stdin)
+  // Secrets travel in the JSON and are consumed by the agent-runner via SDK env option
   const groupIpcDir = path.join(DATA_DIR, 'ipc', group.folder);
+  input.secrets = readSecrets();
   fs.writeFileSync(path.join(groupIpcDir, 'input.json'), JSON.stringify(input));
+  // Remove secrets from input so they don't appear in logs
+  delete input.secrets;
 
   return new Promise((resolve) => {
     const container = spawn('docker', containerArgs, {

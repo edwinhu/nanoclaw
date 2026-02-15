@@ -25,8 +25,7 @@ if [ -d /mnt/projects/obsidian-cli ]; then
   bun build --compile --outfile /home/node/.local/bin/obsidian src/cli.ts >/dev/null 2>&1 || true
 fi
 
-# Load environment
-[ -f /workspace/env-dir/env ] && export $(cat /workspace/env-dir/env | xargs)
+# Secrets are passed via input.json and handled in Node.js — no env files on disk
 
 # Refresh CLI tokens via CDP (headless Chrome running on host)
 export CDP_HOST="${CDP_HOST:-host.docker.internal}"
