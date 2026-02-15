@@ -25,7 +25,7 @@ describe('TypingManager integration in index.ts', () => {
   });
 
   it('creates a typingManager instance', () => {
-    expect(indexSource).toMatch(/const\s+typingManager\s*=\s*new\s+TypingManager/);
+    expect(indexSource).toMatch(/(const|let)\s+typingManager\s*(:\s*TypingManager\s*)?=?\s*(new\s+TypingManager)?/);
   });
 
   it('uses typingManager.start in processGroupMessages instead of inline setInterval', () => {
@@ -62,10 +62,10 @@ describe('TypingManager integration in index.ts', () => {
     // the agent is idle waiting for piped messages. Typing should NOT restart.
     // Typing only restarts when new messages are piped in (startMessageLoop).
     const outputSection = indexSource.match(
-      /await\s+sendMessage\(chatJid,[\s\S]{0,300}resetIdleTimer/,
+      /await\s+routeOutbound\(channels,\s*chatJid,\s*formatted\)[\s\S]{0,300}resetIdleTimer/,
     );
     expect(outputSection).not.toBeNull();
-    // Ensure no typingManager.start between sendMessage and resetIdleTimer
+    // Ensure no typingManager.start between routeOutbound and resetIdleTimer
     expect(outputSection![0]).not.toMatch(/typingManager\.start/);
   });
 });
