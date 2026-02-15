@@ -1,6 +1,7 @@
 export class TypingManager {
   private intervals = new Map<string, NodeJS.Timeout>();
   private resetTimers = new Map<string, NodeJS.Timeout>();
+  private gapTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private sendTyping: (jid: string) => Promise<void>,
@@ -32,25 +33,39 @@ export class TypingManager {
         if (!this.intervals.has(jid)) return;
         // Briefly stop typing, then restart after a short gap
         this.stopTyping!(jid).catch(() => {});
-        setTimeout(() => {
-          if (!this.intervals.has(jid)) return;
-          this.sendTyping(jid).catch(() => {});
-          this.scheduleReset(jid);
-        }, this.resetGapMs);
+        this.gapTimers.set(
+          jid,
+          setTimeout(() => {
+            this.gapTimers.delete(jid);
+            if (!this.intervals.has(jid)) return;
+            this.sendTyping(jid).catch(() => {});
+            this.scheduleReset(jid);
+          }, this.resetGapMs),
+        );
       }, this.resetMs),
     );
   }
 
   stop(jid: string): void {
-    const interval = this.intervals.get(jid);
-    if (interval) {
-      clearInterval(interval);
-      this.intervals.delete(jid);
+    const wasActive = this.intervals.has(jid);
+    this.clearTimer(this.intervals, jid, clearInterval);
+    this.clearTimer(this.resetTimers, jid, clearTimeout);
+    this.clearTimer(this.gapTimers, jid, clearTimeout);
+    // Send the protocol-level "stop typing" signal
+    if (wasActive && this.stopTyping) {
+      this.stopTyping(jid).catch(() => {});
     }
-    const resetTimer = this.resetTimers.get(jid);
-    if (resetTimer) {
-      clearTimeout(resetTimer);
-      this.resetTimers.delete(jid);
+  }
+
+  private clearTimer(
+    map: Map<string, NodeJS.Timeout>,
+    jid: string,
+    clear: (id: NodeJS.Timeout) => void,
+  ): void {
+    const timer = map.get(jid);
+    if (timer) {
+      clear(timer);
+      map.delete(jid);
     }
   }
 

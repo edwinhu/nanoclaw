@@ -45,7 +45,6 @@ export OBSIDIAN_PORT="${OBSIDIAN_PORT:-9444}"
 # Compile and run agent
 cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2
 ln -s /app/node_modules /tmp/dist/node_modules
-chmod -R a-w /tmp/dist
 # Wait for input.json (host writes it just before docker run, but mount propagation may lag)
 for i in 1 2 3 4 5; do
   [ -f /workspace/ipc/input.json ] && break

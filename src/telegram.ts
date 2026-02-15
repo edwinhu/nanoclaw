@@ -233,8 +233,14 @@ function markdownToTelegramHtml(md: string): string {
   // Italic *text* (single asterisk, not inside bold)
   text = text.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<i>$1</i>');
 
+  // Italic _text_ (single underscore, not inside bold __)
+  text = text.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '<i>$1</i>');
+
   // Strikethrough ~~text~~
   text = text.replace(/~~(.+?)~~/g, '<s>$1</s>');
+
+  // Blockquotes (> at start of line) — render as italic (Telegram's <blockquote> adds too much spacing)
+  text = text.replace(/^&gt;\s?(.+)$/gm, '<i>$1</i>');
 
   // Links [text](url)
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');

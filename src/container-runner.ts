@@ -105,12 +105,12 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+  // Always overwrite settings.json to prevent drift (e.g., plugins auto-installing
+  // and injecting hooks that confuse the container agent with "LOCAL SESSION" context)
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(settingsFile, JSON.stringify({
-      env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' },
-    }, null, 2) + '\n');
-  }
+  fs.writeFileSync(settingsFile, JSON.stringify({
+    env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' },
+  }, null, 2) + '\n');
 
   // Sync skills from multiple locations into each group's .claude/skills/
   const skillsDst = path.join(groupSessionsDir, 'skills');

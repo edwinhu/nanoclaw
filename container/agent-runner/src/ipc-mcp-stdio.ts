@@ -19,6 +19,7 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const companionUrl = process.env.COMPANION_URL || 'http://host.docker.internal:3456';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -267,6 +268,111 @@ Use available_groups.json to find the JID for a group. The folder name should be
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
     };
+  },
+);
+
+server.tool(
+  'launch_companion',
+  `Launch a long-running Claude Code session on the host machine via the-companion. Use this for tasks that take a long time (code refactoring, multi-file changes, overnight work) or need to run in a different project directory on the host.
+
+The companion runs as a full Claude Code instance with all tools. You'll get a notification when it completes or fails.
+
+IMPORTANT: project_dir must be the HOST filesystem path (e.g., "/Users/vwh7mb/projects/nanoclaw"), not the container path.
+
+Common host project directories:
+- /Users/vwh7mb/projects/nanoclaw (this project)
+- /Users/vwh7mb/projects/ (parent of all projects)
+- /Users/vwh7mb/dotfiles`,
+  {
+    prompt: z.string().describe('Detailed instructions for what the companion should do. Be specific — it starts fresh with no conversation context.'),
+    project_dir: z.string().describe('HOST filesystem path for the working directory (e.g., "/Users/vwh7mb/projects/nanoclaw")'),
+    task_title: z.string().describe('Short title for tracking and notifications (e.g., "Refactor auth module")'),
+    model: z.string().default('claude-opus-4-6').describe('Model to use. Default: claude-opus-4-6'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can launch companions.' }],
+        isError: true,
+      };
+    }
+
+    try {
+      // 1. Create companion session via HTTP
+      const createRes = await fetch(`${companionUrl}/api/sessions/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cwd: args.project_dir,
+          model: args.model,
+          permissionMode: 'bypassPermissions',
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (!createRes.ok) {
+        const errText = await createRes.text();
+        return {
+          content: [{ type: 'text' as const, text: `Failed to create companion session: ${createRes.status} ${errText}` }],
+          isError: true,
+        };
+      }
+
+      const session = await createRes.json() as { sessionId: string };
+      const sessionId = session.sessionId;
+
+      // 2. Send prompt via WebSocket (fire-and-forget)
+      const wsUrl = companionUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const settle = (fn: () => void) => { if (!settled) { settled = true; clearTimeout(timeout); fn(); } };
+
+        const timeout = setTimeout(() => {
+          settle(() => reject(new Error('WebSocket connection timed out after 10s')));
+        }, 10_000);
+
+        const ws = new WebSocket(`${wsUrl}/ws/browser/${sessionId}`);
+        ws.onopen = () => {
+          ws.send(JSON.stringify({
+            type: 'user_message',
+            content: args.prompt,
+          }));
+          // Close after a brief delay to ensure the message is sent
+          setTimeout(() => {
+            ws.close();
+            settle(() => resolve());
+          }, 500);
+        };
+        ws.onclose = () => {
+          settle(() => reject(new Error('WebSocket closed before message delivery confirmed')));
+        };
+        ws.onerror = (event) => {
+          const msg = event && typeof event === 'object' && 'message' in event
+            ? (event as { message: string }).message : 'connection failed';
+          settle(() => reject(new Error(`WebSocket error: ${msg}`)));
+        };
+      });
+
+      // 3. Register for monitoring via IPC
+      writeIpcFile(TASKS_DIR, {
+        type: 'register_companion',
+        sessionId,
+        taskTitle: args.task_title,
+        projectDir: args.project_dir,
+        chatJid,
+        timestamp: new Date().toISOString(),
+      });
+
+      const monitorUrl = 'http://100.91.182.78:3456';
+      return {
+        content: [{ type: 'text' as const, text: `Companion launched: "${args.task_title}"\nSession: ${sessionId}\nProject: ${args.project_dir}\nModel: ${args.model}\n\nYou'll get a notification when it completes.\nMonitor: ${monitorUrl}` }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to launch companion: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
   },
 );
 

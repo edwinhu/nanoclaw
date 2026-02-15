@@ -43,6 +43,7 @@ import {
   getRouterState,
   getTaskById,
   initDatabase,
+  registerCompanionSession,
   setLastGroupSync,
   setRegisteredGroup,
   setRouterState,
@@ -52,9 +53,10 @@ import {
   updateChatName,
   updateTask,
 } from './db.js';
+import { startCompanionMonitor } from './companion-monitor.js';
 import { GroupQueue } from './group-queue.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { initMatrixTyping, setMatrixTyping } from './matrix-typing.js';
+import { initMatrixTyping } from './matrix-typing.js';
 import {
   cancelTelegramTyping,
   connectTelegram,
@@ -520,6 +522,7 @@ function startIpcWatcher(): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
+                  typingManager.stop(data.chatJid);
                   const ipcPrefix = data.chatJid.startsWith('tg:') ? '' : `${ASSISTANT_NAME}: `;
                   await sendMessage(
                     data.chatJid,
@@ -614,6 +617,10 @@ async function processTaskIpc(
     folder?: string;
     trigger?: string;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For register_companion
+    sessionId?: string;
+    taskTitle?: string;
+    projectDir?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -810,6 +817,38 @@ async function processTaskIpc(
         logger.warn(
           { data },
           'Invalid register_group request - missing required fields',
+        );
+      }
+      break;
+
+    case 'register_companion':
+      // Register a companion session for monitoring
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized register_companion attempt blocked',
+        );
+        break;
+      }
+      if (data.sessionId && data.taskTitle && data.projectDir && data.chatJid) {
+        registerCompanionSession({
+          session_id: data.sessionId as string,
+          task_title: data.taskTitle as string,
+          project_dir: data.projectDir as string,
+          chat_jid: data.chatJid as string,
+        });
+        logger.info(
+          {
+            sessionId: data.sessionId,
+            taskTitle: data.taskTitle,
+            sourceGroup,
+          },
+          'Companion session registered for monitoring',
+        );
+      } else {
+        logger.warn(
+          { data },
+          'Invalid register_companion request - missing required fields',
         );
       }
       break;
@@ -1175,6 +1214,9 @@ async function main(): Promise<void> {
   initMatrixTyping(telegramBotId).catch((err) =>
     logger.warn({ err }, 'Matrix typing init failed'),
   );
+
+  // Start companion session monitor (watches overnight task sessions)
+  startCompanionMonitor({ sendMessage });
 
   if (!TELEGRAM_ONLY) {
     await connectWhatsApp();

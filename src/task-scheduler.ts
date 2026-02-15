@@ -12,6 +12,7 @@ import {
 } from './config.js';
 import { ContainerOutput, runContainerAgent, writeTasksSnapshot } from './container-runner.js';
 import {
+  advanceNextRun,
   getAllTasks,
   getDueTasks,
   getTaskById,
@@ -21,6 +22,19 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
+
+function computeNextRun(task: ScheduledTask): string | null {
+  if (task.schedule_type === 'cron') {
+    const interval = CronExpressionParser.parse(task.schedule_value, {
+      tz: TIMEZONE,
+    });
+    return interval.next().toISOString();
+  } else if (task.schedule_type === 'interval') {
+    const ms = parseInt(task.schedule_value, 10);
+    return new Date(Date.now() + ms).toISOString();
+  }
+  return null; // 'once' tasks have no next run
+}
 
 export interface SchedulerDependencies {
   registeredGroups: () => Record<string, RegisteredGroup>;
@@ -161,17 +175,7 @@ async function runTask(
     error,
   });
 
-  let nextRun: string | null = null;
-  if (task.schedule_type === 'cron') {
-    const interval = CronExpressionParser.parse(task.schedule_value, {
-      tz: TIMEZONE,
-    });
-    nextRun = interval.next().toISOString();
-  } else if (task.schedule_type === 'interval') {
-    const ms = parseInt(task.schedule_value, 10);
-    nextRun = new Date(Date.now() + ms).toISOString();
-  }
-  // 'once' tasks have no next run
+  const nextRun = computeNextRun(task);
 
   const resultSummary = error
     ? `Error: ${error}`
@@ -204,6 +208,11 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
         if (!currentTask || currentTask.status !== 'active') {
           continue;
         }
+
+        // Advance next_run BEFORE enqueueing so subsequent scheduler polls
+        // don't re-discover this task while the container is still running
+        const nextRun = computeNextRun(currentTask);
+        advanceNextRun(currentTask.id, nextRun);
 
         deps.queue.enqueueTask(
           currentTask.chat_jid,

@@ -96,4 +96,68 @@ describe('TypingManager', () => {
     manager.stop('tg:nonexistent');
     expect(manager.isActive('tg:nonexistent')).toBe(false);
   });
+
+  describe('stopTyping callback', () => {
+    let stopTyping: ReturnType<typeof vi.fn>;
+    let managerWithStop: TypingManager;
+
+    beforeEach(() => {
+      stopTyping = vi.fn().mockResolvedValue(undefined);
+      managerWithStop = new TypingManager(sendTyping, 4000, stopTyping, 8000, 500);
+    });
+
+    afterEach(() => {
+      managerWithStop.stopAll();
+    });
+
+    it('stop() calls the stopTyping callback to send protocol-level stop signal', async () => {
+      managerWithStop.start('tg:123');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sendTyping).toHaveBeenCalledTimes(1);
+
+      managerWithStop.stop('tg:123');
+      await vi.advanceTimersByTimeAsync(0);
+
+      // stopTyping MUST be called when stop() is invoked
+      expect(stopTyping).toHaveBeenCalledWith('tg:123');
+    });
+
+    it('stop() does not call stopTyping for non-active chats', async () => {
+      managerWithStop.stop('tg:nonexistent');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopTyping).not.toHaveBeenCalled();
+    });
+
+    it('stopAll() calls stopTyping for every active chat', async () => {
+      managerWithStop.start('tg:123');
+      managerWithStop.start('tg:456');
+      await vi.advanceTimersByTimeAsync(0);
+
+      managerWithStop.stopAll();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(stopTyping).toHaveBeenCalledWith('tg:123');
+      expect(stopTyping).toHaveBeenCalledWith('tg:456');
+    });
+
+    it('stop() clears the orphaned gap timer from scheduleReset', async () => {
+      managerWithStop.start('tg:123');
+      // Advance into the reset cycle: resetMs (8000ms) fires, stopTyping called,
+      // then a 500ms gap timer is scheduled
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(stopTyping).toHaveBeenCalledTimes(1); // reset cycle called stopTyping
+
+      // Now stop() while the 500ms gap timer is pending
+      stopTyping.mockClear();
+      sendTyping.mockClear();
+      managerWithStop.stop('tg:123');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopTyping).toHaveBeenCalledWith('tg:123'); // stop() calls stopTyping
+
+      // The orphaned 500ms gap timer should NOT fire
+      sendTyping.mockClear();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sendTyping).not.toHaveBeenCalled();
+    });
+  });
 });

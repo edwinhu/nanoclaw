@@ -87,6 +87,25 @@ export function initDatabase(): void {
     /* column already exists */
   }
 
+  // Companion session monitoring
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS companion_sessions (
+      session_id TEXT PRIMARY KEY,
+      task_title TEXT NOT NULL,
+      project_dir TEXT NOT NULL,
+      chat_jid TEXT NOT NULL,
+      status TEXT DEFAULT 'running',
+      created_at TEXT NOT NULL,
+      last_check_at TEXT,
+      last_status TEXT,
+      last_num_turns INTEGER DEFAULT 0,
+      total_cost_usd REAL,
+      total_lines_added INTEGER,
+      total_lines_removed INTEGER,
+      error TEXT
+    );
+  `);
+
   // State tables (replacing JSON files)
   db.exec(`
     CREATE TABLE IF NOT EXISTS router_state (
@@ -408,6 +427,13 @@ export function getDueTasks(): ScheduledTask[] {
     .all(now) as ScheduledTask[];
 }
 
+export function advanceNextRun(id: string, nextRun: string | null): void {
+  db.prepare('UPDATE scheduled_tasks SET next_run = ? WHERE id = ?').run(
+    nextRun,
+    id,
+  );
+}
+
 export function updateTaskAfterRun(
   id: string,
   nextRun: string | null,
@@ -437,6 +463,94 @@ export function logTaskRun(log: TaskRunLog): void {
     log.result,
     log.error,
   );
+}
+
+// --- Companion session accessors ---
+
+export interface CompanionSession {
+  session_id: string;
+  task_title: string;
+  project_dir: string;
+  chat_jid: string;
+  status: string;
+  created_at: string;
+  last_check_at: string | null;
+  last_status: string | null;
+  last_num_turns: number;
+  total_cost_usd: number | null;
+  total_lines_added: number | null;
+  total_lines_removed: number | null;
+  error: string | null;
+}
+
+export function registerCompanionSession(session: {
+  session_id: string;
+  task_title: string;
+  project_dir: string;
+  chat_jid: string;
+}): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO companion_sessions
+     (session_id, task_title, project_dir, chat_jid, status, created_at)
+     VALUES (?, ?, ?, ?, 'running', ?)`,
+  ).run(
+    session.session_id,
+    session.task_title,
+    session.project_dir,
+    session.chat_jid,
+    new Date().toISOString(),
+  );
+}
+
+export function getRunningCompanionSessions(): CompanionSession[] {
+  return db
+    .prepare(
+      `SELECT * FROM companion_sessions WHERE status = 'running' ORDER BY created_at`,
+    )
+    .all() as CompanionSession[];
+}
+
+export function updateCompanionSession(
+  sessionId: string,
+  updates: Partial<
+    Pick<
+      CompanionSession,
+      | 'status'
+      | 'last_check_at'
+      | 'last_status'
+      | 'last_num_turns'
+      | 'total_cost_usd'
+      | 'total_lines_added'
+      | 'total_lines_removed'
+      | 'error'
+    >
+  >,
+): void {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  for (const [key, val] of Object.entries(updates)) {
+    if (val !== undefined) {
+      fields.push(`${key} = ?`);
+      values.push(val);
+    }
+  }
+  if (fields.length === 0) return;
+  values.push(sessionId);
+  db.prepare(
+    `UPDATE companion_sessions SET ${fields.join(', ')} WHERE session_id = ?`,
+  ).run(...values);
+}
+
+export function getRecentTerminalCompanionSessions(): CompanionSession[] {
+  return db
+    .prepare(
+      `SELECT * FROM companion_sessions
+       WHERE status IN ('completed', 'failed', 'stuck')
+       AND last_check_at > datetime('now', '-1 hour')
+       ORDER BY created_at`,
+    )
+    .all() as CompanionSession[];
 }
 
 // --- Router state accessors ---

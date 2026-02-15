@@ -178,7 +178,7 @@ superhuman account switch eddyhu@gmail.com
 ```
 
 **Authentication status:** ✅ Tokens cached for all 3 accounts
-**Host CDP:** Running on port 9333 (host.docker.internal:9333)
+**Host CDP:** Running on port 9400 (host.docker.internal:9400)
 
 ### Morgen CLI Setup (✅ WORKING)
 
@@ -230,17 +230,17 @@ morgen calendar free --start 2026-02-10T09:00:00 --end 2026-02-10T17:00:00
 - Always specify to exclude: "Family, Natalie, rjj6@nyu.edu calendars, all holiday and birthday calendars"
 - Example: `morgen chat "What's on my calendar today? Show only Calendar (ehu) and Gmail (eddyhu) events, exclude all other calendars."`
 
-**Host CDP:** Running on port 9223 (host.docker.internal:9223)
+**Host CDP:** Running on port 9400 (host.docker.internal:9400)
 
-## WhatsApp Formatting
+## Message Formatting
 
-Do NOT use markdown headings (##) in WhatsApp messages. Only use:
-- *Bold* (asterisks)
-- _Italic_ (underscores)
-- • Bullets (bullet points)
-- ```Code blocks``` (triple backticks)
+Main channel is Telegram (via Beeper). Markdown is supported:
+- **Bold**, `code`, ```code blocks```
+- ## Headings, bullet lists, numbered lists
+- > Blockquotes
+- [Links](url)
 
-Keep messages clean and readable for WhatsApp.
+**Do NOT use `_underscores_` for italics** — Beeper does not render them. Use **bold** or `> blockquotes` for emphasis instead.
 
 ---
 
@@ -261,6 +261,56 @@ Key paths inside the container:
 - `/workspace/project/store/messages.db` - SQLite database
 - `/workspace/project/store/messages.db` (registered_groups table) - Group config
 - `/workspace/project/groups/` - All group folders
+
+## Companion Sessions (Long-Running Tasks)
+
+Use `launch_companion` to spawn a full Claude Code session on the host for tasks that are too long or complex to run inline. The companion runs independently — you get a notification when it finishes.
+
+**When to use:**
+- Overnight or long-running tasks (refactoring, multi-file changes)
+- Tasks in other projects on the host
+- Work that should continue after the current conversation ends
+- Parallel workstreams (launch multiple companions for independent tasks)
+
+**Usage:**
+```
+launch_companion(
+  prompt: "Refactor the auth module to use JWT tokens...",
+  project_dir: "/Users/vwh7mb/projects/nanoclaw",
+  task_title: "Refactor auth to JWT",
+  model: "claude-opus-4-6"   // optional, defaults to opus
+)
+```
+
+**Important:**
+- `project_dir` must be a **host** path (starts with `/Users/`), not a container path
+- The prompt should be **self-contained** — the companion has no conversation context
+- Include all relevant context, file paths, and requirements in the prompt
+- The companion runs with full tool access and `bypassPermissions` mode
+
+**Common host paths:**
+- `/Users/vwh7mb/projects/nanoclaw` — this project
+- `/Users/vwh7mb/projects/` — parent of all projects
+- `/Users/vwh7mb/dotfiles` — dotfiles repo
+
+**Monitoring:** NanoClaw automatically monitors companion sessions and sends a notification to this chat with cost, duration, and lines changed when they complete or fail. You can also check `http://100.91.182.78:3456` for live status.
+
+---
+
+## Host Claude Code Transcripts
+
+The host's `~/.claude` is mounted at `/workspace/extra/claude-config` (readonly). This contains Claude Code session transcripts from ALL projects on the host machine — not just NanoClaw.
+
+- **Session indexes**: `/workspace/extra/claude-config/projects/*/sessions-index.json`
+  - Each entry has: `sessionId`, `summary`, `modified`, `projectPath`, `gitBranch`
+- **Transcript files**: `/workspace/extra/claude-config/projects/*/<sessionId>.jsonl`
+
+To find recent sessions across all projects:
+```bash
+find /workspace/extra/claude-config/projects/ -name "sessions-index.json" -exec cat {} \; | jq -s '[.[].entries[] | select(.modified > "YYYY-MM-DD")] | sort_by(.modified) | reverse'
+```
+
+Note: `/home/node/.claude` is the container's own session data — NOT the host transcripts.
 
 ---
 
