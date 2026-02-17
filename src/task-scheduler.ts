@@ -166,18 +166,29 @@ async function runTask(
 
   const durationMs = Date.now() - startTime;
 
+  // If the task produced a result (agent delivered output), treat it as success
+  // even if the container later crashed (e.g., exit code 125, unexpected EOF).
+  // This prevents unnecessary catch-up runs for tasks that already delivered.
+  const effectiveStatus = (error && result) ? 'success' : (error ? 'error' : 'success');
+  if (error && result) {
+    logger.info(
+      { taskId: task.id, error },
+      'Task had error but produced result — logging as success to prevent catch-up',
+    );
+  }
+
   logTaskRun({
     task_id: task.id,
     run_at: new Date().toISOString(),
     duration_ms: durationMs,
-    status: error ? 'error' : 'success',
+    status: effectiveStatus,
     result,
-    error,
+    error: effectiveStatus === 'success' ? null : error,
   });
 
   const nextRun = computeNextRun(task);
 
-  const resultSummary = error
+  const resultSummary = (effectiveStatus === 'error' && error)
     ? `Error: ${error}`
     : result
       ? result.slice(0, 200)
@@ -186,6 +197,12 @@ async function runTask(
 }
 
 let schedulerRunning = false;
+
+// Tasks currently dispatched (running or queued). Prevents the scheduler
+// from re-enqueueing a task that getDueTasks() keeps returning because
+// the DB update from advanceNextRun hasn't taken effect yet, or
+// because updateTaskAfterRun re-computes next_run after the container finishes.
+const dispatchedTasks = new Set<string>();
 
 export function startSchedulerLoop(deps: SchedulerDependencies): void {
   if (schedulerRunning) {
@@ -203,21 +220,40 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
       }
 
       for (const task of dueTasks) {
+        // Skip tasks already dispatched (running or queued)
+        if (dispatchedTasks.has(task.id)) {
+          continue;
+        }
+
         // Re-check task status in case it was paused/cancelled
         const currentTask = getTaskById(task.id);
         if (!currentTask || currentTask.status !== 'active') {
           continue;
         }
 
+        // Mark as dispatched before any DB writes or enqueue
+        dispatchedTasks.add(currentTask.id);
+
         // Advance next_run BEFORE enqueueing so subsequent scheduler polls
         // don't re-discover this task while the container is still running
         const nextRun = computeNextRun(currentTask);
         advanceNextRun(currentTask.id, nextRun);
 
+        logger.debug(
+          { taskId: currentTask.id, nextRun },
+          'Advanced next_run, dispatching task',
+        );
+
         deps.queue.enqueueTask(
           currentTask.chat_jid,
           currentTask.id,
-          () => runTask(currentTask, deps),
+          async () => {
+            try {
+              await runTask(currentTask, deps);
+            } finally {
+              dispatchedTasks.delete(currentTask.id);
+            }
+          },
         );
       }
     } catch (err) {

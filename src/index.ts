@@ -39,7 +39,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
 import { logger } from './logger.js';
-import { initMatrixTyping } from './matrix-typing.js';
+import { initMatrixTyping, setMatrixTyping } from './matrix-typing.js';
 import { findChannel, formatMessages, formatOutbound, routeOutbound, stripInternalTags } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -434,9 +434,15 @@ async function main(): Promise<void> {
 
   // Create TypingManager that routes through channels
   typingManager = new TypingManager(
-    (jid) => findChannel(channels, jid)?.setTyping(jid, true) ?? Promise.resolve(),
+    async (jid) => {
+      await (findChannel(channels, jid)?.setTyping(jid, true) ?? Promise.resolve());
+      if (jid.startsWith('tg:')) setMatrixTyping(jid, true);
+    },
     4000,
-    (jid) => findChannel(channels, jid)?.setTyping(jid, false) ?? Promise.resolve(),
+    async (jid) => {
+      await (findChannel(channels, jid)?.setTyping(jid, false) ?? Promise.resolve());
+      if (jid.startsWith('tg:')) setMatrixTyping(jid, false);
+    },
   );
 
   // Initialize Matrix typing (non-blocking — falls back to Telegram-only on failure)
