@@ -36,9 +36,9 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
 ); // 10MB default
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(
-  process.env.IDLE_TIMEOUT || '1500000',
+  process.env.IDLE_TIMEOUT || '180000',
   10,
-); // 25min default — must be < CONTAINER_TIMEOUT so clean shutdown beats hard kill
+); // 3min default — must be < CONTAINER_TIMEOUT so clean shutdown beats hard kill
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,

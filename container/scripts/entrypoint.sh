@@ -1,29 +1,8 @@
 #!/bin/bash
 set -e
 
-# Compile CLI tools from mounted source (host is macOS, need Linux binaries)
-mkdir -p /home/node/.local/bin
-export PATH="/home/node/.local/bin:$PATH"
-if [ -d /mnt/projects/superhuman-cli ]; then
-  cd /mnt/projects/superhuman-cli
-  bun install --silent >/dev/null 2>&1 || true
-  bun build --compile --outfile /home/node/.local/bin/superhuman src/cli.ts >/dev/null 2>&1 || true
-fi
-if [ -d /mnt/projects/morgen-cli ]; then
-  cd /mnt/projects/morgen-cli
-  bun install --silent >/dev/null 2>&1 || true
-  bun build --compile --outfile /home/node/.local/bin/morgen src/cli.ts >/dev/null 2>&1 || true
-fi
-if [ -d /mnt/projects/readwise-cli ]; then
-  cd /mnt/projects/readwise-cli
-  bun install --silent >/dev/null 2>&1 || true
-  bun build --compile --outfile /home/node/.local/bin/readwise src/main.ts >/dev/null 2>&1 || true
-fi
-if [ -d /mnt/projects/obsidian-cli ]; then
-  cd /mnt/projects/obsidian-cli
-  bun install --silent >/dev/null 2>&1 || true
-  bun build --compile --outfile /home/node/.local/bin/obsidian src/cli.ts >/dev/null 2>&1 || true
-fi
+# CLI binaries (superhuman, morgen, readwise, obsidian) are pre-compiled
+# and baked into the image at /usr/local/bin/ — no runtime compilation needed
 
 # Secrets are passed via input.json and handled in Node.js — no env files on disk
 

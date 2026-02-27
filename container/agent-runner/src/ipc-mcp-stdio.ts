@@ -154,9 +154,11 @@ server.tool(
 
       const allTasks = JSON.parse(fs.readFileSync(tasksFile, 'utf-8'));
 
+      // Filter to active/paused tasks only — completed/cancelled are not relevant
+      const activeTasks = allTasks.filter((t: { status: string }) => t.status === 'active' || t.status === 'paused');
       const tasks = isMain
-        ? allTasks
-        : allTasks.filter((t: { groupFolder: string }) => t.groupFolder === groupFolder);
+        ? activeTasks
+        : activeTasks.filter((t: { groupFolder: string }) => t.groupFolder === groupFolder);
 
       if (tasks.length === 0) {
         return { content: [{ type: 'text' as const, text: 'No scheduled tasks found.' }] };
@@ -363,7 +365,7 @@ Common host project directories:
         timestamp: new Date().toISOString(),
       });
 
-      const monitorUrl = 'http://100.91.182.78:3456';
+      const monitorUrl = 'https://mac-vwh7mb-pro.tailc143b.ts.net';
       return {
         content: [{ type: 'text' as const, text: `Companion launched: "${args.task_title}"\nSession: ${sessionId}\nProject: ${args.project_dir}\nModel: ${args.model}\n\nYou'll get a notification when it completes.\nMonitor: ${monitorUrl}` }],
       };

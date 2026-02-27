@@ -43,6 +43,7 @@ export interface SchedulerDependencies {
   onProcess: (groupJid: string, proc: ChildProcess, containerName: string, groupFolder: string) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
   assistantName: string;
+  typingManager?: { stop: (jid: string) => void };
 }
 
 async function runTask(
@@ -163,6 +164,10 @@ async function runTask(
     error = err instanceof Error ? err.message : String(err);
     logger.error({ taskId: task.id, error }, 'Task failed');
   }
+
+  // Always stop typing when task finishes — typing may have been started by
+  // the message loop piping user messages to the container while it was active.
+  deps.typingManager?.stop(task.chat_jid);
 
   const durationMs = Date.now() - startTime;
 

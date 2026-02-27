@@ -25,7 +25,7 @@ const COMPANION_WS_URL =
   COMPANION_URL.replace('http://', 'ws://').replace('https://', 'wss://');
 const POLL_INTERVAL = 30_000;
 const STUCK_THRESHOLD = 2 * 60 * 60_000; // 2 hours
-const MONITOR_URL = 'http://100.91.182.78:3456';
+const MONITOR_URL = 'https://mac-vwh7mb-pro.tailc143b.ts.net';
 
 // Track which sessions have active WebSocket connections
 const activeConnections = new Map<string, WebSocket>();

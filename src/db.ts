@@ -456,10 +456,14 @@ export function updateTaskAfterRun(
   lastResult: string,
 ): void {
   const now = new Date().toISOString();
+  // Only mark 'completed' for one-shot tasks (schedule_type = 'once').
+  // Cron/interval tasks must stay 'active' even if nextRun is transiently null
+  // (e.g., cron-parser failure), otherwise recurring tasks die permanently.
   db.prepare(
     `
     UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
+    SET next_run = ?, last_run = ?, last_result = ?,
+        status = CASE WHEN ? IS NULL AND schedule_type = 'once' THEN 'completed' ELSE status END
     WHERE id = ?
   `,
   ).run(nextRun, now, lastResult, nextRun, id);

@@ -115,12 +115,13 @@ RUN rm -f /usr/local/bin/playwright && npm install -g agent-browser playwright @
 COPY scripts/cdp-browser /usr/local/bin/cdp-browser
 RUN chmod +x /usr/local/bin/cdp-browser
 
-# Copy pre-compiled nlm binary (cross-compiled for Linux arm64)
+# Copy pre-compiled binaries (cross-compiled for Linux arm64 via bun build --compile --target=bun-linux-arm64)
 COPY bin/nlm-linux /usr/local/bin/nlm
-RUN chmod +x /usr/local/bin/nlm
-
-# CLI tools will be mounted from host at /mnt/projects
-# Symlinks created at runtime via entrypoint
+COPY bin/superhuman-linux /usr/local/bin/superhuman
+COPY bin/morgen-linux /usr/local/bin/morgen
+COPY bin/readwise-linux /usr/local/bin/readwise
+COPY bin/obsidian-linux /usr/local/bin/obsidian
+RUN chmod +x /usr/local/bin/nlm /usr/local/bin/superhuman /usr/local/bin/morgen /usr/local/bin/readwise /usr/local/bin/obsidian
 
 # Create app directory
 WORKDIR /app

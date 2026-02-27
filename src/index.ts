@@ -469,6 +469,7 @@ async function main(): Promise<void> {
         queue.registerProcess(groupJid, proc, containerName, groupFolder),
       sendMessage: (jid: string, text: string) => routeOutbound(channels, jid, text),
       assistantName: ASSISTANT_NAME,
+      typingManager,
     });
 
     startIpcWatcher({

@@ -92,7 +92,10 @@ export class GroupQueue {
 
     if (state.active) {
       state.pendingTasks.push({ id: taskId, groupJid, fn });
-      logger.debug({ groupJid, taskId }, 'Container active, task queued');
+      // Preempt: tell the idle container to exit so the scheduled task can run.
+      // If container is mid-processing, it finishes the current turn then exits.
+      this.closeStdin(groupJid);
+      logger.info({ groupJid, taskId }, 'Preempting active container for scheduled task');
       return;
     }
 
