@@ -378,6 +378,97 @@ Common host project directories:
   },
 );
 
+const RESULTS_DIR = path.join(IPC_DIR, 'results');
+
+server.tool(
+  'launch_remote_session',
+  `Launch an interactive Claude Code session with remote control on the host machine. This spawns a full Claude Code TUI in a wezterm pane with --dangerously-skip-permissions. Remote control auto-enables, providing a URL for phone/browser access.
+
+The session is fully interactive from both the wezterm TUI and the remote control URL.
+
+IMPORTANT: project_dir must be the HOST filesystem path (e.g., "/Users/vwh7mb/projects/nanoclaw"), not the container path.
+
+Common host project directories:
+- /Users/vwh7mb/projects/nanoclaw (this project)
+- /Users/vwh7mb/projects/ (parent of all projects)
+- /Users/vwh7mb/dotfiles`,
+  {
+    project_dir: z.string().describe('HOST filesystem path for the working directory (e.g., "/Users/vwh7mb/projects/nanoclaw")'),
+    session_name: z.string().optional().describe('Human-readable name for the session (defaults to basename of project_dir)'),
+    resume: z.string().optional().describe('Session ID to resume a previous session'),
+    extra: z.string().optional().describe('Additional claude flags as a string'),
+    timeout: z.number().optional().describe('Poll timeout in seconds for URL capture (default: 45)'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can launch remote sessions.' }],
+        isError: true,
+      };
+    }
+
+    const requestId = `rs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const data: Record<string, unknown> = {
+      type: 'launch_remote_session',
+      requestId,
+      projectDir: args.project_dir,
+      timestamp: new Date().toISOString(),
+    };
+    if (args.session_name) data.sessionName = args.session_name;
+    if (args.resume) data.resume = args.resume;
+    if (args.extra) data.extra = args.extra;
+    if (args.timeout) data.timeout = args.timeout;
+
+    writeIpcFile(TASKS_DIR, data);
+
+    // Poll for response file (host writes result after executing)
+    const resultFile = path.join(RESULTS_DIR, `${requestId}.json`);
+    const pollInterval = 2000;
+    const maxWait = 120_000; // 2 minutes max
+    let elapsed = 0;
+
+    while (elapsed < maxWait) {
+      await new Promise((r) => setTimeout(r, pollInterval));
+      elapsed += pollInterval;
+
+      if (fs.existsSync(resultFile)) {
+        try {
+          const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+          // Clean up response file
+          fs.unlinkSync(resultFile);
+
+          if (result.status === 'error') {
+            return {
+              content: [{ type: 'text' as const, text: `Failed to launch remote session: ${result.error}` }],
+              isError: true,
+            };
+          }
+
+          let msg = `Remote session started.\nProject: ${args.project_dir}\nPane: ${result.pane_id} (${result.multiplexer})`;
+          if (result.url) {
+            msg += `\nURL: ${result.url}`;
+          } else {
+            msg += `\nNote: Remote control URL not captured. Use /rc in the pane to enable.`;
+          }
+
+          return { content: [{ type: 'text' as const, text: msg }] };
+        } catch (err) {
+          return {
+            content: [{ type: 'text' as const, text: `Error reading response: ${err instanceof Error ? err.message : String(err)}` }],
+            isError: true,
+          };
+        }
+      }
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: `Timed out waiting for remote session launch result (${maxWait / 1000}s). The session may still be starting — check wezterm.` }],
+      isError: true,
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

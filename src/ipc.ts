@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
@@ -137,6 +138,11 @@ async function processTaskIpc(
     sessionId?: string;
     taskTitle?: string;
     projectDir?: string;
+    requestId?: string;
+    sessionName?: string;
+    timeout?: number;
+    resume?: string;
+    extra?: string;
   },
   sourceGroup: string,
   isMain: boolean,
@@ -257,6 +263,61 @@ async function processTaskIpc(
         logger.warn({ data }, 'Invalid register_group request - missing required fields');
       }
       break;
+
+    case 'launch_remote_session': {
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized launch_remote_session attempt blocked');
+        break;
+      }
+      if (!data.requestId || !data.projectDir) {
+        logger.warn({ data }, 'Invalid launch_remote_session request - missing fields');
+        break;
+      }
+
+      const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'results');
+      fs.mkdirSync(resultsDir, { recursive: true });
+      const resultFile = path.join(resultsDir, `${data.requestId}.json`);
+
+      try {
+        const launchScript = path.join(
+          process.env.HOME || '/Users/vwh7mb',
+          '.claude/skills/remote-session/scripts/launch-remote.sh',
+        );
+        const args = [`--project-dir`, data.projectDir];
+        if (data.sessionName) args.push(`--name`, data.sessionName);
+        if (data.timeout) args.push(`--timeout`, String(data.timeout));
+        if (data.resume) args.push(`--resume`, data.resume);
+        if (data.extra) args.push(`--extra`, data.extra);
+
+        const cmd = ['bash', launchScript, ...args]
+          .map((a) => `'${a.replace(/'/g, "'\\''")}'`)
+          .join(' ');
+
+        const output = execSync(cmd, {
+          timeout: 120_000,
+          encoding: 'utf-8',
+          env: { ...process.env, CLAUDECODE: '' },
+        }).trim();
+
+        const result = JSON.parse(output);
+        fs.writeFileSync(resultFile, JSON.stringify(result, null, 2));
+        logger.info(
+          { requestId: data.requestId, result },
+          'Remote session launched via IPC',
+        );
+      } catch (err) {
+        const errorResult = {
+          status: 'error',
+          error: err instanceof Error ? err.message : String(err),
+        };
+        fs.writeFileSync(resultFile, JSON.stringify(errorResult, null, 2));
+        logger.error(
+          { requestId: data.requestId, err },
+          'Failed to launch remote session',
+        );
+      }
+      break;
+    }
 
     case 'register_companion':
       if (!isMain) {
