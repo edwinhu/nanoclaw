@@ -30,7 +30,7 @@ LLMs cannot reliably compute dates, days of the week, or day offsets. Every ment
 | "I'll just check afterward" | You won't catch your own error — confirmation bias | Verify BEFORE creating the event |
 | "The user said Friday so I'll use the date I computed" | If your date isn't Friday, you computed wrong | Always verify day-of-week matches |
 | "Morgen/the tool will catch it" | Tools accept any valid date — they don't check day-of-week intent | YOU must verify before calling the tool |
-| "The `--timezone` flag handles the conversion" | Only for plain text output. `--json` always returns UTC regardless of `--timezone`. | Subtract 5h (EST) or 4h (EDT) manually from JSON times |
+| "The `--timezone` flag handles the conversion" | Only for plain text output. `--json` always returns UTC regardless of `--timezone`. | Convert with `TZ=America/New_York date -d "2026-02-10T16:00:00Z"` (handles DST automatically) |
 
 ### Red Flags — STOP If You Catch Yourself:
 
@@ -38,7 +38,7 @@ LLMs cannot reliably compute dates, days of the week, or day offsets. Every ment
 - **Assuming a date's day-of-week without running `date`** → STOP. Verify it.
 - **A tool returned a different date than you expected** → STOP. Re-derive from scratch using `date`. Don't ignore the discrepancy.
 - **About to create a calendar event without verifying the date** → STOP. Run the pre-flight check first.
-- **Morgen `--json` returned a time and you are treating it as ET** → STOP. JSON is always UTC. Subtract 5h (EST) or 4h (EDT).
+- **Morgen `--json` returned a time and you are treating it as ET** → STOP. JSON is always UTC. Convert with `TZ=America/New_York date -d "<utc_time>"`.
 
 **Claiming a date is correct without running `date` to verify is LYING to the user.**
 
@@ -201,7 +201,7 @@ Unless explicitly requested by the user, filter results to show only Calendar an
 - **CRITICAL - Timezone behavior**:
   - **Input (create/schedule)**: With `--timezone America/New_York`, input times are interpreted as ET. So pass the actual ET time (e.g., `--start 2026-02-10T11:00:00` for 11 AM ET).
   - **Plain text output**: With `--timezone America/New_York`, times are displayed in ET. ✅
-  - **JSON output**: `--json` always returns UTC times regardless of `--timezone`. Convert manually: subtract 5 hours (EST) or 4 hours (EDT) to get Eastern Time.
+  - **JSON output**: `--json` always returns UTC times regardless of `--timezone`. Convert with: `TZ=America/New_York date -d "<utc_time>"` (handles EST/EDT automatically).
 - **`#morgen-routine` events** (identified by `#morgen-routine` in description) are Morgen scheduling frames, NOT real events:
   - *Eat the Frog*, *Shallow Work*, *Focus Time*, etc.
   - **NEVER show these to the user** when listing calendar events — filter them out
