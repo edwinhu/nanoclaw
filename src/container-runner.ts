@@ -120,16 +120,22 @@ function buildVolumeMounts(
 
   // Sync skills from multiple locations into each group's .claude/skills/
   const skillsDst = path.join(groupSessionsDir, 'skills');
-  const copyRecursive = (src: string, dst: string) => {
+  // Skip internal subdirs that contain sub-skills/phases (e.g. bluebook-audit/lib/skills/audit-*)
+  // These are internal to the parent skill and shouldn't be top-level in the container
+  const SKIP_SUBDIRS = new Set(['lib', 'scripts', 'commands', 'references']);
+  const copyRecursive = (src: string, dst: string, depth = 0) => {
     fs.mkdirSync(dst, { recursive: true });
     for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
       const srcPath = path.join(src, entry.name);
       const dstPath = path.join(dst, entry.name);
+      if (depth === 0 && entry.isDirectory() && SKIP_SUBDIRS.has(entry.name)) {
+        continue;
+      }
       // Skip broken symlinks
       try {
         const stat = fs.statSync(srcPath);
         if (stat.isDirectory()) {
-          copyRecursive(srcPath, dstPath);
+          copyRecursive(srcPath, dstPath, depth + 1);
         } else {
           fs.copyFileSync(srcPath, dstPath);
         }
@@ -246,6 +252,25 @@ function buildVolumeMounts(
     });
   }
 
+  // Mount ~/nix for nix-darwin config (git history, etc.)
+  const nixDir = path.join(homeDir, 'nix');
+  if (fs.existsSync(nixDir)) {
+    mounts.push({
+      hostPath: nixDir,
+      containerPath: '/mnt/nix',
+      readonly: true,
+    });
+  }
+
+  // Mount spotless persistent memory (shared across all groups — single agent identity)
+  const spotlessDir = path.join(DATA_DIR, 'spotless');
+  fs.mkdirSync(spotlessDir, { recursive: true });
+  mounts.push({
+    hostPath: spotlessDir,
+    containerPath: '/home/node/.spotless',
+    readonly: false,
+  });
+
   // Mount nlm auth credentials (NotebookLM CLI)
   const nlmDir = path.join(homeDir, '.nlm');
   if (fs.existsSync(nlmDir)) {
@@ -283,6 +308,16 @@ function buildVolumeMounts(
       hostPath: ghConfigDir,
       containerPath: '/home/node/.config/gh',
       readonly: true,
+    });
+  }
+
+  // Mount ~/Downloads for file access (downloads, exports, etc.)
+  const downloadsDir = path.join(homeDir, 'Downloads');
+  if (fs.existsSync(downloadsDir)) {
+    mounts.push({
+      hostPath: downloadsDir,
+      containerPath: '/home/node/Downloads',
+      readonly: false,
     });
   }
 

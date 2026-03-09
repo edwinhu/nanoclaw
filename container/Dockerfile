@@ -111,6 +111,9 @@ ENV NODE_PATH=/usr/local/lib/node_modules
 # Remove Python playwright binary first to avoid conflict with npm playwright
 RUN rm -f /usr/local/bin/playwright && npm install -g agent-browser playwright @anthropic-ai/claude-code
 
+# Install spotless (persistent memory proxy for Claude Code)
+RUN BUN_INSTALL=/usr/local bun add -g @lableaks/spotless
+
 # Copy CDP helper script
 COPY scripts/cdp-browser /usr/local/bin/cdp-browser
 RUN chmod +x /usr/local/bin/cdp-browser

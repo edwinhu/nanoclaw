@@ -279,7 +279,7 @@ server.tool(
 
 The companion runs as a full Claude Code instance with all tools. You'll get a notification when it completes or fails.
 
-IMPORTANT: project_dir must be the HOST filesystem path (e.g., "/Users/vwh7mb/projects/nanoclaw"), not the container path.
+IMPORTANT: project_dir must be the HOST filesystem path (e.g., "/Users/vwh7mb/projects/nanoclaw"), not the container path. Do NOT try to validate the path — it only exists on the host, not in the container. Just pass it directly.
 
 Common host project directories:
 - /Users/vwh7mb/projects/nanoclaw (this project)
@@ -386,7 +386,7 @@ server.tool(
 
 The session is fully interactive from both the wezterm TUI and the remote control URL.
 
-IMPORTANT: project_dir must be the HOST filesystem path (e.g., "/Users/vwh7mb/projects/nanoclaw"), not the container path.
+IMPORTANT: project_dir must be the HOST filesystem path (e.g., "/Users/vwh7mb/projects/nanoclaw"), not the container path. Do NOT try to validate the path — it only exists on the host, not in the container. Just pass it directly.
 
 Common host project directories:
 - /Users/vwh7mb/projects/nanoclaw (this project)
@@ -464,6 +464,82 @@ Common host project directories:
 
     return {
       content: [{ type: 'text' as const, text: `Timed out waiting for remote session launch result (${maxWait / 1000}s). The session may still be starting — check wezterm.` }],
+      isError: true,
+    };
+  },
+);
+
+server.tool(
+  'send_session_command',
+  `Send a slash command or text to a Claude Code session running in a wezterm pane on the host. Use this to control remote sessions (e.g., /reload-plugins, /clear, /cost, /compact).
+
+If pane_id is omitted, the command is sent to the first Claude Code pane found. To target a specific session, provide the pane_id from launch_remote_session's output.
+
+Common commands:
+- /reload-plugins — reload plugins in the session
+- /clear — clear conversation history
+- /compact — compact conversation context
+- /cost — show token usage`,
+  {
+    command: z.string().describe('The command to send (e.g., "/reload-plugins", "/clear")'),
+    pane_id: z.string().optional().describe('Wezterm pane ID to target. If omitted, auto-detects first Claude Code pane.'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can send session commands.' }],
+        isError: true,
+      };
+    }
+
+    const requestId = `sc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const data: Record<string, unknown> = {
+      type: 'send_session_command',
+      requestId,
+      command: args.command,
+      timestamp: new Date().toISOString(),
+    };
+    if (args.pane_id) data.paneId = args.pane_id;
+
+    writeIpcFile(TASKS_DIR, data);
+
+    // Poll for response
+    const resultFile = path.join(RESULTS_DIR, `${requestId}.json`);
+    const pollInterval = 1000;
+    const maxWait = 15_000;
+    let elapsed = 0;
+
+    while (elapsed < maxWait) {
+      await new Promise((r) => setTimeout(r, pollInterval));
+      elapsed += pollInterval;
+
+      if (fs.existsSync(resultFile)) {
+        try {
+          const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+          fs.unlinkSync(resultFile);
+
+          if (result.status === 'error') {
+            return {
+              content: [{ type: 'text' as const, text: `Failed: ${result.error}` }],
+              isError: true,
+            };
+          }
+
+          return {
+            content: [{ type: 'text' as const, text: `Sent "${args.command}" to pane ${result.pane_id}` }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: 'text' as const, text: `Error reading response: ${err instanceof Error ? err.message : String(err)}` }],
+            isError: true,
+          };
+        }
+      }
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: 'Timed out waiting for send_session_command result.' }],
       isError: true,
     };
   },

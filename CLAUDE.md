@@ -24,6 +24,8 @@ Single Node.js process that connects to Telegram (via Beeper/Matrix bridge), rou
 |-------|-------------|
 | `/setup` | First-time installation, authentication, service configuration |
 | `/customize` | Adding channels, integrations, changing behavior |
+| `/add-spotless` | Add Spotless persistent memory (cross-session identity and recall) |
+| `/add-remote-session` | Add remote session control (spawn Claude Code in wezterm from container) |
 | `/debug` | Container issues, logs, troubleshooting |
 
 ## Development

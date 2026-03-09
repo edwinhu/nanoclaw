@@ -143,6 +143,8 @@ async function processTaskIpc(
     timeout?: number;
     resume?: string;
     extra?: string;
+    command?: string;
+    paneId?: string;
   },
   sourceGroup: string,
   isMain: boolean,
@@ -293,18 +295,40 @@ async function processTaskIpc(
           .map((a) => `'${a.replace(/'/g, "'\\''")}'`)
           .join(' ');
 
-        const output = execSync(cmd, {
-          timeout: 120_000,
-          encoding: 'utf-8',
-          env: { ...process.env, CLAUDECODE: '' },
-        }).trim();
+        // execSync throws on non-zero exit, but the script outputs JSON even on
+        // failure. Catch and extract stdout from the error object.
+        let output: string;
+        try {
+          output = execSync(cmd, {
+            timeout: 120_000,
+            encoding: 'utf-8',
+            env: {
+              ...process.env,
+              CLAUDECODE: '',
+              PATH: `${process.env.HOME}/.nix-profile/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`,
+            },
+          }).trim();
+        } catch (execErr: any) {
+          // Script exited non-zero but may have printed JSON to stdout
+          output = (execErr.stdout || '').toString().trim();
+          if (!output) {
+            throw execErr;
+          }
+        }
 
         const result = JSON.parse(output);
         fs.writeFileSync(resultFile, JSON.stringify(result, null, 2));
-        logger.info(
-          { requestId: data.requestId, result },
-          'Remote session launched via IPC',
-        );
+        if (result.status === 'error') {
+          logger.error(
+            { requestId: data.requestId, result },
+            'Remote session launch returned error',
+          );
+        } else {
+          logger.info(
+            { requestId: data.requestId, result },
+            'Remote session launched via IPC',
+          );
+        }
       } catch (err) {
         const errorResult = {
           status: 'error',
@@ -314,6 +338,67 @@ async function processTaskIpc(
         logger.error(
           { requestId: data.requestId, err },
           'Failed to launch remote session',
+        );
+      }
+      break;
+    }
+
+    case 'send_session_command': {
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized send_session_command attempt blocked');
+        break;
+      }
+      if (!data.requestId || !data.command) {
+        logger.warn({ data }, 'Invalid send_session_command request - missing fields');
+        break;
+      }
+
+      const scResultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'results');
+      fs.mkdirSync(scResultsDir, { recursive: true });
+      const scResultFile = path.join(scResultsDir, `${data.requestId}.json`);
+
+      try {
+        const sendScript = path.join(
+          process.env.HOME || '/Users/vwh7mb',
+          '.claude/skills/remote-session/scripts/send-command.sh',
+        );
+        const args = [data.command];
+        if (data.paneId) args.unshift('--pane-id', data.paneId);
+
+        const cmd = ['bash', sendScript, ...args]
+          .map((a) => `'${a.replace(/'/g, "'\\''")}'`)
+          .join(' ');
+
+        let output: string;
+        try {
+          output = execSync(cmd, {
+            timeout: 15_000,
+            encoding: 'utf-8',
+            env: {
+              ...process.env,
+              PATH: `${process.env.HOME}/.nix-profile/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`,
+            },
+          }).trim();
+        } catch (execErr: any) {
+          output = (execErr.stdout || '').toString().trim();
+          if (!output) throw execErr;
+        }
+
+        const result = JSON.parse(output);
+        fs.writeFileSync(scResultFile, JSON.stringify(result, null, 2));
+        logger.info(
+          { requestId: data.requestId, result },
+          'Session command sent via IPC',
+        );
+      } catch (err) {
+        const errorResult = {
+          status: 'error',
+          error: err instanceof Error ? err.message : String(err),
+        };
+        fs.writeFileSync(scResultFile, JSON.stringify(errorResult, null, 2));
+        logger.error(
+          { requestId: data.requestId, err },
+          'Failed to send session command',
         );
       }
       break;

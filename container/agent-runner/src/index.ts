@@ -420,9 +420,14 @@ async function runQuery(
       resume: sessionId,
       resumeSessionAt: resumeAt,
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
-        : undefined,
+      systemPrompt: {
+        type: 'preset' as const,
+        preset: 'claude_code' as const,
+        // "Primary working directory:" marker required by Spotless to classify
+        // requests as main-session (not subagent). Without it, all events are
+        // archived as is_subagent=1 and never digested.
+        append: `\nPrimary working directory: /workspace/group\n${globalClaudeMd || ''}`,
+      },
       allowedTools: [
         'Bash',
         'Read', 'Write', 'Edit', 'Glob', 'Grep',

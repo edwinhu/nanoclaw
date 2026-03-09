@@ -135,12 +135,36 @@ Use the `/obsidian` skill for full documentation.
 
 - **Rob's birthday**: February 14
 
+## Personal Productivity
+
+**Tool Selection:**
+
+1. **User-specific operations** → Use dedicated skills:
+   - **email-handling** skill: For email operations with your account/sending preferences
+   - **calendar-availability** skill: For determining your availability with your calendar rules
+   - Direct CLI: `superhuman`, `morgen`, `obsidian` commands for simple operations
+
+2. **General multi-step workflows** → Delegate to `workflows:assistant` agent:
+   ```
+   Task(subagent_type="workflows:assistant", prompt="...")
+   ```
+   - Use for: Complex coordination tasks involving multiple tools
+   - Example: "Schedule meeting by checking availability, creating poll, sending emails, booking calendar event"
+   - workflows:assistant is general-purpose; user-specific rules (accounts, calendars, preferences) are passed via context
+
+The account-specific context and container-specific rules below define YOUR preferences and are used by both the skills and workflows:assistant.
+
 ## Email & Calendar Accounts
 
 **Account Preferences (Superhuman & Morgen):**
 - **Primary (Personal)**: eddyhu@gmail.com - **USE BY DEFAULT**
 - **Secondary (Work)**: ehu@law.virginia.edu (UVA Law)
 - Other: eh2889@nyu.edu (NYU email - rarely used)
+
+**Tool Selection - MANDATORY:**
+- **Email tasks**: ALWAYS use `superhuman` CLI (never workflows:assistant or other tools)
+- **Calendar tasks**: ALWAYS use `morgen` CLI (never workflows:assistant or other tools)
+- **Only delegate to workflows:assistant**: For complex multi-step workflows involving both email AND calendar coordination
 
 **Usage Guidelines - CLI FIRST:**
 - **ALWAYS try CLI commands first** for all email/calendar operations
@@ -151,71 +175,7 @@ Use the `/obsidian` skill for full documentation.
   - Summarizing threads or extracting action items
 - **When CLI fails**: Ask the user if they want to try the AI approach instead
 
-<EXTREMELY-IMPORTANT>
-### The Iron Law of Email Sending
-
-**NEVER include `--send` on any email command unless the user's exact words include "send", "send it", or "go ahead and send". This is not negotiable.**
-
-Emails sent to real people cannot be unsent. A draft costs the user 2 seconds to review. A premature send costs trust.
-</EXTREMELY-IMPORTANT>
-
-**Default behavior:** ALWAYS create drafts (no `--send` flag). Tell the user the draft is ready to review.
-
-#### Rationalization Table
-
-| Excuse | Reality | Do Instead |
-|---|---|---|
-| "The user said 'reply to this' so they want it sent" | "Reply" means compose a reply. Only "send" means send. | Create a draft. Tell the user it is ready. |
-| "The user's tone implies urgency" | Urgency does not imply consent to send. Urgent + wrong = worse. | Draft it. Mention it is urgent and ready on their word. |
-| "I already drafted it and it looks perfect" | Your judgment about email quality is irrelevant. The user must review. | Create a draft. Always. |
-| "It's just a quick acknowledgment / one-liner" | Even "thanks" emails go to real inboxes. The user may not want to send at all. | Draft it. Let the user decide. |
-| "The user said 'handle this email'" | "Handle" means process it, not send without review. | Draft a reply. Summarize what you did. |
-
-#### Red Flags — STOP If You Catch Yourself:
-
-- **About to add `--send` to a superhuman command** → STOP. Did the user literally say "send"? If not, remove `--send`.
-- **User said "reply" and you are constructing `superhuman reply --send`** → STOP. "Reply" ≠ "send".
-- **User said "send" but you have not shown them the draft content first** → STOP. Show the draft, confirm, then send.
-
-**Sending an email the user did not explicitly authorize is acting WITHOUT CONSENT on behalf of a real person.**
-
-**CRITICAL - Email Body Formatting:**
-- Use **single newlines** between paragraphs in `--body`, NOT blank lines
-- Blank lines (double newlines) become extra `<br>` tags → ugly spacing in HTML email
-- ✅ `"Hi Neil,\nAre you planning..."` → clean paragraph break
-- ❌ `"Hi Neil,\n\nAre you planning..."` → double-spaced gap
-
-**Email Filtering - Important Human Emails:**
-When fetching recent emails, filter for human emails that need attention using Superhuman's AI labels:
-
-**Gmail (eddyhu@gmail.com):**
-- **Human emails**: `CATEGORY_PERSONAL` label (Gmail's AI categorization)
-- **Important emails**: Also has `IMPORTANT` label
-- **Automated/newsletters**: `CATEGORY_UPDATES`, `CATEGORY_PROMOTIONS`, `CATEGORY_FORUMS`, `CATEGORY_SOCIAL`
-- **Chat messages**: `CHAT` label (Google Chat/Hangouts)
-- **Superhuman AI Triage** (if enabled):
-  - `Label_26` = `[Superhuman]/AI/Respond` - needs response
-  - `Label_28` = `[Superhuman]/AI/Meeting` - meeting-related
-  - `Label_25` = `[Superhuman]/AI/Marketing`
-  - `Label_29` = `[Superhuman]/AI/News`
-  - `Label_32` = `[Superhuman]/AI/AutoArchived`
-
-**UVA/Outlook (ehu@law.virginia.edu):**
-- Outlook/Exchange doesn't use Gmail's category system
-- Most emails have minimal labels: `[]` or `["UNREAD"]`
-- Filter by sender patterns to exclude automated:
-  - Exclude: `no-reply@`, `noreply@`, `comm@`, `onbehalfof@`, `@myworkday.com`, `@zoom.us`
-  - Human: Emails from known colleagues (malenko@bc.edu, jzytnick@gmail.com, njn6hh@virginia.edu)
-  - Replies: Subject starts with `Re:` often indicates human conversation
-
-**Filtering logic:**
-```bash
-# Gmail: Filter for CATEGORY_PERSONAL or IMPORTANT
-superhuman inbox --account eddyhu@gmail.com --json | jq '.[] | select(.labelIds | contains(["CATEGORY_PERSONAL"]) or contains(["IMPORTANT"]))'
-
-# UVA: Filter by sender exclusion patterns
-superhuman inbox --account ehu@law.virginia.edu --json | jq '.[] | select(.from.email | (contains("no-reply@") or contains("noreply@") or contains("comm@") or contains("onbehalfof@")) | not)'
-```
+**Email behavior rules** (sending gates, formatting, filtering, threading) → see **email-handling** skill.
 
 **Calendar Filtering:**
 When querying or filtering calendar events, **ONLY include these calendars**:
@@ -247,31 +207,8 @@ Unless explicitly requested by the user, filter results to show only Calendar an
   - **NEVER show these to the user** when listing calendar events — filter them out
   - They are only relevant when scheduling: you CAN place tasks/events over them
   - When using `--json`, filter with: `select((.description // "") | contains("#morgen-routine") | not)`
-- **Hard commitments** (Securities Regulation, Faculty Lunch, Office Hours, meetings with people): NEVER schedule over these
 
-#### Gate: Pre-Schedule Verification
-
-Before creating ANY calendar event or scheduling ANY task to a time slot:
-
-1. **FETCH**: Run `morgen calendar events --start <date> --end <next-day> --json --timezone America/New_York`
-2. **CONVERT**: If using `--json`, convert UTC times to ET (subtract 5h EST / 4h EDT)
-3. **CHECK**: For each existing event in the target time window:
-   - Is `freeBusyStatus` = `"busy"`?
-   - If busy, does `description` contain `#morgen-routine`?
-   - If busy AND no `#morgen-routine` → **BLOCKED. Do not schedule here.**
-4. **VERIFY DATE**: Run `date -d "<date>" +"%A"` to confirm day-of-week matches intent (see Iron Law of Dates)
-5. **CONFIRM**: State the time slot, what is currently there, and why it is available
-6. Only THEN create the event
-
-**Skipping any step is not allowed.**
-
-#### Red Flags — STOP If You Catch Yourself:
-
-- **About to create a calendar event without first querying existing events for that time window** → STOP. Fetch the calendar first.
-- **JSON output shows a time and you are interpreting it as ET without conversion** → STOP. JSON is always UTC. Convert.
-- **Scheduling over a `freeBusyStatus: "busy"` event that is not `#morgen-routine`** → STOP. This is a hard commitment.
-
-**Claiming a time slot is "free" without checking the calendar is GUESSING on behalf of the user's schedule. If you guess wrong, the user misses a commitment.**
+**Availability rules** (what blocks time, flexible commitments, teaching buffer, pre-schedule gate) -> see **calendar-availability** skill.
 
 ### Superhuman CLI Setup (✅ WORKING)
 
@@ -281,10 +218,6 @@ The superhuman CLI is compiled for Linux and available in `~/.local/bin/superhum
 ```bash
 superhuman account auth  # Extracts OAuth tokens via CDP from host Superhuman app
 ```
-
-**CRITICAL - Email Threading:**
-**ALWAYS use `superhuman reply` or `superhuman reply-all` for email responses to maintain threading.** NEVER use `draft create` for replies - recipients won't see the conversation context.
-
 
 **Common commands (EMAIL ONLY — never use superhuman for calendar):**
 ```bash
@@ -413,23 +346,7 @@ launch_companion(
 )
 ```
 
-#### Gate: Pre-Launch Companion
-
-Before calling `launch_companion`, verify ALL of these:
-
-1. Does `project_dir` start with `/Users/`? (Must be a **host** path, NOT `/workspace/`)
-2. Does the prompt contain ALL necessary context? (No references to "our conversation", "the file we discussed", etc.)
-3. Are ALL file paths in the prompt **host** paths, not container paths?
-
-If any check fails, fix before launching. The companion has no conversation context and cannot access container paths.
-
-**Additional notes:**
-- The companion runs with full tool access and `bypassPermissions` mode
-
-**Common host paths:**
-- `/Users/vwh7mb/projects/nanoclaw` — this project
-- `/Users/vwh7mb/projects/` — parent of all projects
-- `/Users/vwh7mb/dotfiles` — dotfiles repo
+**Validation, path mapping, and workflows skill invocation** -> see **companion-launch** skill.
 
 ## Scheduled Task Context
 
