@@ -34,32 +34,52 @@ Text inside `<internal>` tags is logged but not sent to the user. If you've alre
 
 When working as a sub-agent or teammate, only use `send_message` if instructed to by the main agent.
 
-## Email, Calendar, Tasks & Notes
-
-Delegate to the `workflows:assistant` agent for email, calendar, tasks, notes, and Google Workspace:
-
-```
-Task(subagent_type="workflows:assistant", prompt="...")
-```
-
-It wraps `superhuman` (email), `morgen` (calendar/tasks), `obsidian` (notes), and `gws` (Google Workspace).
-
-**Tool split — do NOT use both for the same thing:**
-- **`superhuman`** → Email ONLY
-- **`morgen`** → Calendar and Tasks ONLY (NEVER use `superhuman calendar`)
-
 ## Your Workspace
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, or anything that should persist.
 
 Your `CLAUDE.md` file in that folder is your memory - update it with important context you want to remember.
 
-## Memory
+## User Preferences
 
-The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
+### Important Dates
 
-When you learn something important:
-- Create files for structured data (e.g., `customers.md`, `preferences.md`)
-- Split files larger than 500 lines into folders
-- Add recurring context directly to this CLAUDE.md
-- Always index new memory files at the top of CLAUDE.md
+- **Rob's birthday**: February 14
+
+### Email & Calendar Accounts
+
+- **Primary (Personal)**: eddyhu@gmail.com — **USE BY DEFAULT**
+- **Secondary (Work)**: ehu@law.virginia.edu (UVA Law)
+- Other: eh2889@nyu.edu (NYU email — rarely used)
+
+**Tool split — do NOT use both for the same thing:**
+- **`superhuman`** → Email ONLY
+- **`morgen`** → Calendar and Tasks ONLY (NEVER use `superhuman calendar`)
+
+**CLI FIRST:** Always try CLI commands first. Only use AI commands (`superhuman ai`, `morgen chat`) as fallback for complex requests.
+
+**Email behavior rules** (sending gates, formatting, filtering, threading) → see **email-handling** skill.
+
+### Calendar Filtering
+
+**ONLY include these calendars** (exclude all others unless asked):
+- **Calendar** (ehu) — Work, ehu@law.virginia.edu
+- **Gmail** (eddyhu) — Personal, eddyhu@gmail.com
+
+**Exclude**: Family, Natalie, rjj6@nyu.edu, holidays, birthdays.
+
+**`#morgen-routine` events** (Eat the Frog, Shallow Work, Focus Time): scheduling frames, NOT real events. Filter them out when listing. You CAN schedule over them.
+
+**Availability rules** → see **calendar-availability** skill.
+
+### Meeting Video Links
+
+- **Default**: Zoom — `https://law-virginia.zoom.us/j/3823453577`
+- Include in `--description` (Morgen auto-detects `virtualRoom`)
+- **Booking page**: `https://book.morgen.so/eddyhu026`
+
+### Obsidian Vaults
+
+- **Primary vault:** `/workspace/extra/Notes/Vault`
+- **Writing vault:** `/workspace/extra/Notes/Writing`
+- Use the `/obsidian` skill for full documentation.

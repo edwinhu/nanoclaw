@@ -114,6 +114,15 @@ RUN rm -f /usr/local/bin/playwright && npm install -g agent-browser playwright @
 # Install spotless (persistent memory proxy for Claude Code)
 RUN BUN_INSTALL=/usr/local bun add -g @lableaks/spotless
 
+# Patch spotless: disable raw history replay.
+# NanoClaw's MessageStream handles in-session context; Spotless digested
+# memories + identity handle cross-session recall. Raw history replay
+# duplicates both and wastes ~60% of context budget.
+COPY patches/spotless-no-history.js /tmp/spotless-no-history.js
+RUN node /tmp/spotless-no-history.js \
+      "$(dirname $(readlink -f $(which spotless)))/history.ts" \
+    && rm /tmp/spotless-no-history.js
+
 # Copy CDP helper script
 COPY scripts/cdp-browser /usr/local/bin/cdp-browser
 RUN chmod +x /usr/local/bin/cdp-browser

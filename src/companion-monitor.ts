@@ -351,7 +351,7 @@ async function maybeSendSummary(deps: {
 
     await deps.sendMessage(
       chatJid,
-      `## All Overnight Tasks Finished\n\n` +
+      `## All Companion Tasks Finished\n\n` +
         lines.join('\n') +
         `\n\n**Total cost**: $${totalCost.toFixed(2)}\n` +
         `Review: ${MONITOR_URL}`,

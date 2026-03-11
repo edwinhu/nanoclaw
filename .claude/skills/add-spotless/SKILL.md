@@ -10,17 +10,19 @@ This skill adds [Spotless](https://github.com/LabLeaks/spotless) to NanoClaw. Sp
 **What this adds:**
 - Spotless proxy inside agent containers (intercepts API calls transparently)
 - Persistent SQLite database shared across all groups (single agent identity)
-- Automatic memory injection: `<your identity>`, `<relevant knowledge>`, conversation history
-- Scheduled digest via launchd (runs `claude -p` to consolidate raw events into memories)
+- Automatic memory injection: `<your identity>`, `<relevant knowledge>` (digested memories)
+- Scheduled digest via launchd every 15 minutes (consolidates raw events into memories)
 
 **Architecture:**
 ```
 Claude Agent SDK → ANTHROPIC_BASE_URL → Spotless proxy (localhost:9050)
     → augments system prompt with <spotless-orientation>
-    → injects history + identity + memories into user messages
+    → injects identity + selector-picked memories into user messages
     → forwards to Anthropic API
-    → archives request/response to SQLite
+    → archives request/response to SQLite for future digests
 ```
+
+**Important: Raw history replay is DISABLED.** NanoClaw's `MessageStream` handles in-session context (the SDK maintains full conversation state within a container session). Spotless's raw history reconstruction is redundant and wastes ~60% of context budget. Only digested memories and identity are injected. The patch is applied at Docker build time via `container/patches/spotless-no-history.js`.
 
 ## Prerequisites
 
@@ -46,8 +48,8 @@ If neither is present, tell the user to add one (refer to the `/setup` skill for
    - This becomes the Spotless agent identifier and the "I am {name}" in identity
 
 2. **Digest schedule**: How often should memories be consolidated?
-   - Default: Daily at 4am
-   - More frequent (every 3 hours) if the agent is heavily used
+   - Default: Every 15 minutes (via launchd `StartInterval`)
+   - Less frequent (hourly) if the agent is lightly used
 
 ## 1. Install Spotless in Docker Image
 
@@ -56,9 +58,20 @@ Edit `container/Dockerfile`. Add after the `claude-code` global install line (`n
 ```dockerfile
 # Install spotless (persistent memory proxy for Claude Code)
 RUN BUN_INSTALL=/usr/local bun add -g @lableaks/spotless
+
+# Patch spotless: disable raw history replay.
+# NanoClaw's MessageStream handles in-session context; Spotless digested
+# memories + identity handle cross-session recall. Raw history replay
+# duplicates both and wastes ~60% of context budget.
+COPY patches/spotless-no-history.js /tmp/spotless-no-history.js
+RUN node /tmp/spotless-no-history.js \
+      "$(dirname $(readlink -f $(which spotless)))/history.ts" \
+    && rm /tmp/spotless-no-history.js
 ```
 
-**Important:** `BUN_INSTALL=/usr/local` is required. Without it, bun installs to `/home/node/.bun/bin` which isn't in the container's PATH.
+**Important:**
+- `BUN_INSTALL=/usr/local` is required. Without it, bun installs to `/home/node/.bun/bin` which isn't in the container's PATH.
+- The patch script (`container/patches/spotless-no-history.js`) replaces `buildHistory()` with a stub that returns empty messages but preserves consolidation pressure calculation. This is critical — without it, Spotless replays the entire `raw_events` table as synthetic conversation turns, duplicating NanoClaw's in-session context and consuming ~60% of the context budget.
 
 ## 2. Update Entrypoint
 
@@ -252,13 +265,8 @@ Create `~/Library/LaunchAgents/com.nanoclaw.spotless-digest.plist`:
         <string>/bin/bash</string>
         <string>PROJECT_ROOT/scripts/spotless-digest.sh</string>
     </array>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>4</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <key>StartInterval</key>
+    <integer>900</integer>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -342,15 +350,14 @@ CONTAINER=$(docker ps --filter "name=nanoclaw" --format '{{.Names}}' | head -1)
 docker exec "$CONTAINER" cat /tmp/spotless.log
 ```
 
-Should show `Memory suffix injected` and `History trace: N messages`.
+Should show `Memory suffix injected` and `History trace: 0 messages` (history replay is disabled by the patch — 0 is expected).
 
 ## What Spotless Injects
 
 On every API request, spotless adds:
 
 1. **System prompt**: `<spotless-orientation>` block explaining the memory system
-2. **History prefix**: Reconstructed conversation history from raw_events, with `--- new session ---` dividers
-3. **Memory suffix** (on user messages):
+2. **Memory suffix** (on user messages):
    ```xml
    <your identity>
    I am AGENT_NAME.
@@ -363,6 +370,9 @@ On every API request, spotless adds:
    memory content 2
    </relevant knowledge>
    ```
+
+**NOT injected** (disabled by patch):
+- ~~History prefix~~ — raw conversation replay is disabled. NanoClaw's `MessageStream` handles in-session context; digested memories handle cross-session recall.
 
 ## Troubleshooting
 
