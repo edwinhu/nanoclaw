@@ -8,7 +8,7 @@ set -e
 
 # Refresh CLI tokens via CDP (headless Chrome running on host)
 export CDP_HOST="${CDP_HOST:-host.docker.internal}"
-export CDP_PORT="${CDP_PORT:-9400}"
+export CDP_PORT="${CDP_PORT:-9222}"
 if command -v superhuman >/dev/null 2>&1; then
   timeout 30 superhuman account auth 2>/dev/null || true
 fi

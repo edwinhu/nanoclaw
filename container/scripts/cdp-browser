@@ -6,7 +6,7 @@
 HOST_IP="host.docker.internal"  # Docker networking to reach host
 
 # App configurations — all served by headless Chrome on host (port 9400)
-CDP_DEFAULT="${CDP_PORT:-9400}"
+CDP_DEFAULT="${CDP_PORT:-9222}"
 declare -A CDP_PORTS=(
   [superhuman]=$CDP_DEFAULT
   [morgen]=$CDP_DEFAULT

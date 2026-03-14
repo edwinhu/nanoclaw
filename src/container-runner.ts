@@ -54,6 +54,7 @@ interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+  optional?: boolean; // Skip if Docker can't mount (e.g., macOS TCC-protected dirs)
 }
 
 function buildVolumeMounts(
@@ -311,15 +312,8 @@ function buildVolumeMounts(
     });
   }
 
-  // Mount ~/Downloads for file access (downloads, exports, etc.)
-  const downloadsDir = path.join(homeDir, 'Downloads');
-  if (fs.existsSync(downloadsDir)) {
-    mounts.push({
-      hostPath: downloadsDir,
-      containerPath: '/home/node/Downloads',
-      readonly: false,
-    });
-  }
+  // ~/Downloads not mounted: macOS TCC blocks Docker from accessing it.
+  // Agent can use /tmp or /workspace for file output instead.
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {

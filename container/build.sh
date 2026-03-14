@@ -18,6 +18,23 @@ if [ -d "$HOME/projects/nlm" ]; then
   GOOS=linux GOARCH=arm64 "$GO" build -C "$HOME/projects/nlm" -o "$SCRIPT_DIR/bin/nlm-linux" -ldflags="-s -w" ./cmd/nlm
 fi
 
+# Cross-compile Bun/TypeScript CLIs for Linux arm64
+BUN="${BUN:-$(command -v bun 2>/dev/null || echo /opt/homebrew/bin/bun)}"
+
+compile_cli() {
+  local cli="$1" entry="$2"
+  local cli_dir="$HOME/projects/$cli"
+  if [ -d "$cli_dir" ]; then
+    local bin_name="${cli%-cli}"
+    echo "Cross-compiling $bin_name..."
+    "$BUN" build --compile --target=bun-linux-arm64 "$cli_dir/$entry" --outfile "$SCRIPT_DIR/bin/${bin_name}-linux"
+  fi
+}
+
+compile_cli superhuman-cli src/cli.ts
+compile_cli morgen-cli src/cli.ts
+compile_cli readwise-cli src/main.ts
+
 echo "Building NanoClaw agent container image..."
 echo "Image: ${IMAGE_NAME}:${TAG}"
 

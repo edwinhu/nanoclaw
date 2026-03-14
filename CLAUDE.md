@@ -46,12 +46,12 @@ launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
 
 ## CDP Authentication (Superhuman, Morgen)
 
-A **headless Chrome** instance runs on the host (port 9400, profile `~/.config/nanoclaw-chrome`) with Superhuman and Morgen web apps loaded and logged in. At container startup, the entrypoint runs `superhuman account auth` and `morgen auth`, which connect to this Chrome via CDP (`host.docker.internal:9400`), evaluate JS in the app tabs to extract OAuth tokens, and cache them locally. Tokens are short-lived (~1 hour) but containers typically finish in minutes.
+A **headless Chrome** instance runs on the host (port 9222, profile `~/.config/nanoclaw-chrome`) with Superhuman and Morgen web apps loaded and logged in. At container startup, the entrypoint runs `superhuman account auth` and `morgen auth`, which connect to this Chrome via CDP (`host.docker.internal:9222`), evaluate JS in the app tabs to extract OAuth tokens, and cache them locally. Tokens are short-lived (~1 hour) but containers typically finish in minutes.
 
 Key files:
 - `container/scripts/entrypoint.sh` — runs auth at startup (lines 30-38)
 - `superhuman-cli/src/token-api.ts` — extracts tokens from `window.GoogleAccount.credential._authData`
-- Host Chrome: `Google Chrome --headless=new --user-data-dir=~/.config/nanoclaw-chrome --remote-debugging-port=9400`
+- Host Chrome: `Google Chrome --headless=new --user-data-dir=~/.config/nanoclaw-chrome --remote-debugging-port=9222`
 
 This is **not** the Superhuman/Morgen Electron desktop apps — it's a separate headless Chrome with the web versions.
 

@@ -6,7 +6,7 @@ allowed-tools: Bash(cdp-browser:*)
 
 # CDP App Control
 
-Control web apps (Superhuman, Morgen) running in headless Chrome on the host machine via CDP (port 9400).
+Control web apps (Superhuman, Morgen) running in headless Chrome on the host machine via CDP (port 9222).
 
 ## Quick Start
 
@@ -36,9 +36,9 @@ const playwright = require('playwright');
 
 | App | Port | Use For |
 |-----|------|---------|
-| `superhuman` | 9400 | Email management (mail.superhuman.com tab) |
-| `morgen` | 9400 | Calendar, scheduling (web.morgen.so tab) |
-| `chrome` | 9400 | General web browsing |
+| `superhuman` | 9222 | Email management (mail.superhuman.com tab) |
+| `morgen` | 9222 | Calendar, scheduling (web.morgen.so tab) |
+| `chrome` | 9222 | General web browsing |
 
 ## Commands
 
@@ -47,16 +47,16 @@ const playwright = require('playwright');
 ```bash
 cdp-browser superhuman check
 # Output:
-# ✓ superhuman CDP endpoint reachable at http://host.docker.internal:9400
+# ✓ superhuman CDP endpoint reachable at http://host.docker.internal:9222
 # Browser: Chrome/...
-# WebSocket: ws://host.docker.internal:9400/devtools/browser/...
+# WebSocket: ws://host.docker.internal:9222/devtools/browser/...
 ```
 
 ### Get WebSocket URL
 
 ```bash
 cdp-browser superhuman ws
-# ws://host.docker.internal:9400/devtools/browser/abc-123
+# ws://host.docker.internal:9222/devtools/browser/abc-123
 ```
 
 ### List Pages/Tabs
@@ -66,7 +66,7 @@ cdp-browser morgen pages
 # Pages in morgen:
 # [0] Morgen - Calendar
 #     URL: https://web.morgen.so/calendar
-#     WS:  ws://host.docker.internal:9400/devtools/page/xyz-456
+#     WS:  ws://host.docker.internal:9222/devtools/page/xyz-456
 ```
 
 ## Playwright Integration
@@ -187,7 +187,7 @@ If `cdp-browser` reports the app is not reachable:
 
 2. **Verify** Chrome is running:
    ```bash
-   curl http://localhost:9400/json  # Should list superhuman + morgen tabs
+   curl http://localhost:9222/json  # Should list superhuman + morgen tabs
    ```
 
 3. **From container**, check again:
@@ -205,7 +205,7 @@ If `cdp-browser` reports the app is not reachable:
 
 ## Security
 
-- CDP port (9400) is only accessible from localhost/Docker
+- CDP port (9222) is only accessible from localhost/Docker
 - No external network access to this port
 - Apps run with your host user's full permissions
 - Container can do anything you could do in the app

@@ -340,11 +340,13 @@ export function validateAdditionalMounts(
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+  optional?: boolean;
 }> {
   const validatedMounts: Array<{
     hostPath: string;
     containerPath: string;
     readonly: boolean;
+    optional?: boolean;
   }> = [];
 
   for (const mount of mounts) {
@@ -355,6 +357,7 @@ export function validateAdditionalMounts(
         hostPath: result.realHostPath!,
         containerPath: `/workspace/extra/${result.resolvedContainerPath}`,
         readonly: result.effectiveReadonly!,
+        optional: true, // Additional mounts may reference TCC-protected dirs
       });
 
       logger.debug(
