@@ -26,7 +26,7 @@ interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
-  secrets?: Record<string, string>;
+  assistantName?: string;
 }
 
 interface ContainerOutput {
@@ -142,7 +142,7 @@ function getSessionSummary(sessionId: string, transcriptPath: string): string | 
 /**
  * Archive the full transcript to conversations/ before compaction.
  */
-function createPreCompactHook(): HookCallback {
+function createPreCompactHook(assistantName?: string): HookCallback {
   return async (input, _toolUseId, _context) => {
     const preCompact = input as PreCompactHookInput;
     const transcriptPath = preCompact.transcript_path;
@@ -172,7 +172,7 @@ function createPreCompactHook(): HookCallback {
       const filename = `${date}-${name}.md`;
       const filePath = path.join(conversationsDir, filename);
 
-      const markdown = formatTranscriptMarkdown(messages, summary);
+      const markdown = formatTranscriptMarkdown(messages, summary, assistantName);
       fs.writeFileSync(filePath, markdown);
 
       log(`Archived conversation to ${filePath}`);
@@ -252,7 +252,7 @@ function parseTranscript(content: string): ParsedMessage[] {
   return messages;
 }
 
-function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null): string {
+function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null, assistantName?: string): string {
   const now = new Date();
   const formatDateTime = (d: Date) => d.toLocaleString('en-US', {
     month: 'short',
@@ -271,7 +271,7 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
   lines.push('');
 
   for (const msg of messages) {
-    const sender = msg.role === 'user' ? 'User' : 'Andy';
+    const sender = msg.role === 'user' ? 'User' : (assistantName || 'Assistant');
     const content = msg.content.length > 2000
       ? msg.content.slice(0, 2000) + '...'
       : msg.content;
@@ -397,8 +397,8 @@ async function runQuery(
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 
-  // Scan /workspace/extra/* for additional directories (e.g. mounted project dirs)
-  // so their CLAUDE.md files are picked up automatically by the SDK
+  // Discover additional directories mounted at /workspace/extra/*
+  // These are passed to the SDK so their CLAUDE.md files are loaded automatically
   const extraDirs: string[] = [];
   const extraBase = '/workspace/extra';
   if (fs.existsSync(extraBase)) {
@@ -407,9 +407,9 @@ async function runQuery(
         extraDirs.push(path.join(extraBase, entry.name));
       }
     }
-    if (extraDirs.length > 0) {
-      log(`Found ${extraDirs.length} additional directories: ${extraDirs.join(', ')}`);
-    }
+  }
+  if (extraDirs.length > 0) {
+    log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
   for await (const message of query({
@@ -417,9 +417,9 @@ async function runQuery(
     options: {
       model: 'sonnet',
       cwd: '/workspace/group',
+      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       systemPrompt: {
         type: 'preset' as const,
         preset: 'claude_code' as const,
@@ -455,7 +455,7 @@ async function runQuery(
         },
       },
       hooks: {
-        PreCompact: [{ hooks: [createPreCompactHook()] }],
+        PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
         PreToolUse: [{ matcher: 'Bash', hooks: [createSanitizeBashHook()] }],
       },
     }
@@ -501,8 +501,7 @@ async function main(): Promise<void> {
   try {
     const stdinData = await readStdin();
     containerInput = JSON.parse(stdinData);
-    // Delete the input file — it contains secrets
-    try { fs.unlinkSync('/workspace/ipc/input.json'); } catch { /* may not exist */ }
+    try { fs.unlinkSync('/tmp/input.json'); } catch { /* may not exist */ }
     log(`Received input for group: ${containerInput.groupFolder}`);
   } catch (err) {
     writeOutput({
@@ -513,13 +512,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Build SDK environment: inherit process.env + inject secrets.
-  // Secrets are passed to the SDK via the `env` option so they're
-  // available for API auth but NOT inherited by Bash subprocesses.
+  // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
+  // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
-  for (const [key, value] of Object.entries(containerInput.secrets || {})) {
-    sdkEnv[key] = value;
-  }
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
@@ -541,7 +536,7 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
-  // Query loop: run query → wait for IPC message → run new query → repeat
+  // Query loop: run query -> wait for IPC message -> run new query -> repeat
   let resumeAt: string | undefined;
   try {
     while (true) {

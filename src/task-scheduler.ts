@@ -1,46 +1,78 @@
 import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
-import path from 'path';
 
+import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
-  GROUPS_DIR,
-  IDLE_TIMEOUT,
-  MAIN_GROUP_FOLDER,
-  SCHEDULER_POLL_INTERVAL,
-  TIMEZONE,
-} from './config.js';
-import { ContainerOutput, runContainerAgent, writeTasksSnapshot } from './container-runner.js';
+  ContainerOutput,
+  runContainerAgent,
+  writeTasksSnapshot,
+} from './container-runner.js';
 import {
   advanceNextRun,
   getAllTasks,
   getDueTasks,
   getTaskById,
   logTaskRun,
+  updateTask,
   updateTaskAfterRun,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
-function computeNextRun(task: ScheduledTask): string | null {
+/**
+ * Compute the next run time for a recurring task, anchored to the
+ * task's scheduled time rather than Date.now() to prevent cumulative
+ * drift on interval-based tasks.
+ *
+ * Co-authored-by: @community-pr-601
+ */
+export function computeNextRun(task: ScheduledTask): string | null {
+  if (task.schedule_type === 'once') return null;
+
+  const now = Date.now();
+
   if (task.schedule_type === 'cron') {
     const interval = CronExpressionParser.parse(task.schedule_value, {
       tz: TIMEZONE,
     });
     return interval.next().toISOString();
-  } else if (task.schedule_type === 'interval') {
-    const ms = parseInt(task.schedule_value, 10);
-    return new Date(Date.now() + ms).toISOString();
   }
-  return null; // 'once' tasks have no next run
+
+  if (task.schedule_type === 'interval') {
+    const ms = parseInt(task.schedule_value, 10);
+    if (!ms || ms <= 0) {
+      // Guard against malformed interval that would cause an infinite loop
+      logger.warn(
+        { taskId: task.id, value: task.schedule_value },
+        'Invalid interval value',
+      );
+      return new Date(now + 60_000).toISOString();
+    }
+    // Anchor to the scheduled time, not now, to prevent drift.
+    // Skip past any missed intervals so we always land in the future.
+    let next = new Date(task.next_run!).getTime() + ms;
+    while (next <= now) {
+      next += ms;
+    }
+    return new Date(next).toISOString();
+  }
+
+  return null;
 }
 
 export interface SchedulerDependencies {
   registeredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
   queue: GroupQueue;
-  onProcess: (groupJid: string, proc: ChildProcess, containerName: string, groupFolder: string) => void;
+  onProcess: (
+    groupJid: string,
+    proc: ChildProcess,
+    containerName: string,
+    groupFolder: string,
+  ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
   assistantName: string;
   typingManager?: { stop: (jid: string) => void };
@@ -51,7 +83,27 @@ async function runTask(
   deps: SchedulerDependencies,
 ): Promise<void> {
   const startTime = Date.now();
-  const groupDir = path.join(GROUPS_DIR, task.group_folder);
+  let groupDir: string;
+  try {
+    groupDir = resolveGroupFolderPath(task.group_folder);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    // Stop retry churn for malformed legacy rows.
+    updateTask(task.id, { status: 'paused' });
+    logger.error(
+      { taskId: task.id, groupFolder: task.group_folder, error },
+      'Task has invalid group folder',
+    );
+    logTaskRun({
+      task_id: task.id,
+      run_at: new Date().toISOString(),
+      duration_ms: Date.now() - startTime,
+      status: 'error',
+      result: null,
+      error,
+    });
+    return;
+  }
   fs.mkdirSync(groupDir, { recursive: true });
 
   logger.info(
@@ -81,7 +133,7 @@ async function runTask(
   }
 
   // Update tasks snapshot for container to read (filtered by group)
-  const isMain = task.group_folder === MAIN_GROUP_FOLDER;
+  const isMain = group.isMain === true;
   const tasks = getAllTasks();
   writeTasksSnapshot(
     task.group_folder,
@@ -105,16 +157,18 @@ async function runTask(
   const sessionId =
     task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
 
-  // Idle timer: writes _close sentinel after IDLE_TIMEOUT of no output,
-  // so the container exits instead of hanging at waitForIpcMessage forever.
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  // After the task produces a result, close the container promptly.
+  // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the
+  // query loop to time out. A short delay handles any final MCP calls.
+  const TASK_CLOSE_DELAY_MS = 10000;
+  let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const resetIdleTimer = () => {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      logger.debug({ taskId: task.id }, 'Scheduled task idle timeout, closing container stdin');
+  const scheduleClose = () => {
+    if (closeTimer) return; // already scheduled
+    closeTimer = setTimeout(() => {
+      logger.debug({ taskId: task.id }, 'Closing task container after result');
       deps.queue.closeStdin(task.chat_jid);
-    }, IDLE_TIMEOUT);
+    }, TASK_CLOSE_DELAY_MS);
   };
 
   try {
@@ -127,18 +181,20 @@ async function runTask(
         chatJid: task.chat_jid,
         isMain,
         isScheduledTask: true,
+        assistantName: ASSISTANT_NAME,
       },
-      (proc, containerName) => deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+      (proc, containerName) =>
+        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (strip <internal> tags)
-          const text = streamedOutput.result.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-          if (text) {
-            await deps.sendMessage(task.chat_jid, `${deps.assistantName}: ${text}`);
-          }
-          // Only reset idle timer on actual results, not session-update markers
-          resetIdleTimer();
+          // Forward result to user (sendMessage handles formatting)
+          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          scheduleClose();
+        }
+        if (streamedOutput.status === 'success') {
+          deps.queue.notifyIdle(task.chat_jid);
+          scheduleClose(); // Close promptly even when result is null (e.g. IPC-only tasks)
         }
         if (streamedOutput.status === 'error') {
           error = streamedOutput.error || 'Unknown error';
@@ -146,12 +202,12 @@ async function runTask(
       },
     );
 
-    if (idleTimer) clearTimeout(idleTimer);
+    if (closeTimer) clearTimeout(closeTimer);
 
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
     } else if (output.result) {
-      // Messages are sent via MCP tool (IPC), result text is just logged
+      // Result was already forwarded to the user via the streaming callback above
       result = output.result;
     }
 
@@ -160,7 +216,7 @@ async function runTask(
       'Task completed',
     );
   } catch (err) {
-    if (idleTimer) clearTimeout(idleTimer);
+    if (closeTimer) clearTimeout(closeTimer);
     error = err instanceof Error ? err.message : String(err);
     logger.error({ taskId: task.id, error }, 'Task failed');
   }
@@ -174,7 +230,8 @@ async function runTask(
   // If the task produced a result (agent delivered output), treat it as success
   // even if the container later crashed (e.g., exit code 125, unexpected EOF).
   // This prevents unnecessary catch-up runs for tasks that already delivered.
-  const effectiveStatus = (error && result) ? 'success' : (error ? 'error' : 'success');
+  const effectiveStatus =
+    error && result ? 'success' : error ? 'error' : 'success';
   if (error && result) {
     logger.info(
       { taskId: task.id, error },
@@ -193,11 +250,12 @@ async function runTask(
 
   const nextRun = computeNextRun(task);
 
-  const resultSummary = (effectiveStatus === 'error' && error)
-    ? `Error: ${error}`
-    : result
-      ? result.slice(0, 200)
-      : 'Completed';
+  const resultSummary =
+    effectiveStatus === 'error' && error
+      ? `Error: ${error}`
+      : result
+        ? result.slice(0, 200)
+        : 'Completed';
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 
@@ -269,4 +327,9 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
   };
 
   loop();
+}
+
+/** @internal - for tests only. */
+export function _resetSchedulerLoopForTests(): void {
+  schedulerRunning = false;
 }

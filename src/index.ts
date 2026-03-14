@@ -7,14 +7,22 @@ import { TelegramChannel } from './channels/telegram.js';
 import { startCompanionMonitor } from './companion-monitor.js';
 import {
   ASSISTANT_NAME,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  GROUPS_DIR,
   IDLE_TIMEOUT,
-  MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
+  TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
+import { startCredentialProxy } from './credential-proxy.js';
+import './channels/index.js';
+import {
+  getChannelFactory,
+  getRegisteredChannelNames,
+} from './channels/registry.js';
 import {
   AvailableGroup,
   ContainerOutput,
@@ -22,6 +30,7 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { PROXY_BIND_HOST } from './container-runtime.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -29,6 +38,7 @@ import {
   getAllTasks,
   getMessagesSince,
   getNewMessages,
+  getRegisteredGroup,
   getRouterState,
   initDatabase,
   setRegisteredGroup,
@@ -82,13 +92,13 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   registeredGroups[jid] = group;
   setRegisteredGroup(jid, group);
 
-  const groupDir = path.join(DATA_DIR, '..', 'groups', group.folder);
+  const groupDir = path.join(GROUPS_DIR, group.folder);
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
   logger.info({ jid, name: group.name, folder: group.folder }, 'Group registered');
 }
 
-function getAvailableGroups(): AvailableGroup[] {
+export function getAvailableGroups(): import('./container-runner.js').AvailableGroup[] {
   const chats = getAllChats();
   const registeredJids = new Set(Object.keys(registeredGroups));
 
@@ -102,11 +112,16 @@ function getAvailableGroups(): AvailableGroup[] {
     }));
 }
 
+/** @internal Test helper — do NOT use in production code. */
+export function _setRegisteredGroups(groups: Record<string, RegisteredGroup>): void {
+  registeredGroups = groups;
+}
+
 async function processGroupMessages(chatJid: string): Promise<boolean> {
   const group = registeredGroups[chatJid];
   if (!group) return true;
 
-  const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+  const isMainGroup = group.isMain === true;
   const previousCursor = lastAgentTimestamp[chatJid] || '';
   const missedMessages = getMessagesSince(chatJid, previousCursor, ASSISTANT_NAME);
 
@@ -117,7 +132,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages);
+  const prompt = formatMessages(missedMessages, TIMEZONE);
   lastAgentTimestamp[chatJid] = missedMessages[missedMessages.length - 1].timestamp;
   saveState();
 
@@ -173,7 +188,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
     lastAgentTimestamp[chatJid] = previousCursor;
     saveState();
-    logger.warn({ group: group.name }, 'Agent error, rolled back message cursor for retry');
+    logger.warn(
+      { group: group.name },
+      'Agent error, rolled back message cursor for retry',
+    );
     return false;
   }
 
@@ -186,7 +204,7 @@ async function runAgent(
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
-  const isMain = group.folder === MAIN_GROUP_FOLDER;
+  const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
 
   const tasks = getAllTasks();
@@ -272,7 +290,13 @@ async function startMessageLoop(): Promise<void> {
           const group = registeredGroups[chatJid];
           if (!group) continue;
 
-          const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+          const channel = findChannel(channels, chatJid);
+          if (!channel) {
+            logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
+            continue;
+          }
+
+          const isMainGroup = group.isMain === true;
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           if (needsTrigger) {
@@ -282,13 +306,19 @@ async function startMessageLoop(): Promise<void> {
 
           const allPending = getMessagesSince(chatJid, lastAgentTimestamp[chatJid] || '', ASSISTANT_NAME);
           const messagesToSend = allPending.length > 0 ? allPending : groupMessages;
-          const formatted = formatMessages(messagesToSend);
+          const formatted = formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
             typingManager.start(chatJid);
             logger.debug({ chatJid, count: messagesToSend.length }, 'Piped messages to active container');
             lastAgentTimestamp[chatJid] = messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
+            // Show typing indicator while the container processes the piped message
+            channel
+              .setTyping?.(chatJid, true)
+              ?.catch((err) =>
+                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
+              );
           } else {
             queue.enqueueMessageCheck(chatJid);
           }
@@ -393,6 +423,12 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
+  // Start credential proxy (containers route API calls through this)
+  const proxyServer = await startCredentialProxy(
+    CREDENTIAL_PROXY_PORT,
+    PROXY_BIND_HOST,
+  );
+
   // Graceful shutdown handlers
   const advanceAllCursors = () => {
     const now = new Date().toISOString();
@@ -435,12 +471,12 @@ async function main(): Promise<void> {
   // Create TypingManager that routes through channels
   typingManager = new TypingManager(
     async (jid) => {
-      await (findChannel(channels, jid)?.setTyping(jid, true) ?? Promise.resolve());
+      await (findChannel(channels, jid)?.setTyping?.(jid, true) ?? Promise.resolve());
       if (jid.startsWith('tg:')) setMatrixTyping(jid, true);
     },
     4000,
     async (jid) => {
-      await (findChannel(channels, jid)?.setTyping(jid, false) ?? Promise.resolve());
+      await (findChannel(channels, jid)?.setTyping?.(jid, false) ?? Promise.resolve());
       if (jid.startsWith('tg:')) setMatrixTyping(jid, false);
     },
   );
@@ -473,15 +509,15 @@ async function main(): Promise<void> {
     });
 
     startIpcWatcher({
-      channels,
+      sendMessage: (jid: string, text: string) => routeOutbound(channels, jid, text),
       registeredGroups: () => registeredGroups,
       registerGroup,
-      syncGroupMetadata: async (force: boolean) => {
+      syncGroups: async (force: boolean) => {
         const wa = channels.find((ch) => ch.name === 'WhatsApp') as WhatsAppChannel | undefined;
         if (wa) await wa.syncGroupMetadata(force);
       },
       getAvailableGroups,
-      typingManager,
+      writeGroupsSnapshot,
     });
 
     queue.setProcessMessagesFn(processGroupMessages);
@@ -498,7 +534,16 @@ async function main(): Promise<void> {
           msg.message?.extendedTextMessage?.text ||
           '';
         const isBotMessage = isFromMe && content.startsWith(`${ASSISTANT_NAME}:`);
-        storeMessage(msg, chatJid, isFromMe, pushName, isBotMessage);
+        storeMessage({
+          id: msg.key?.id || `wa-${Date.now()}`,
+          chat_jid: chatJid,
+          sender: msg.key?.participant || msg.key?.remoteJid || chatJid,
+          sender_name: pushName || 'Unknown',
+          content,
+          timestamp: new Date((msg.messageTimestamp as number) * 1000).toISOString(),
+          is_from_me: isFromMe,
+          is_bot_message: isBotMessage,
+        });
       },
       registeredGroups: () => registeredGroups,
     });
@@ -510,7 +555,15 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  logger.error({ err }, 'Failed to start NanoClaw');
-  process.exit(1);
-});
+// Guard: only run when executed directly, not when imported by tests
+const isDirectRun =
+  process.argv[1] &&
+  new URL(import.meta.url).pathname ===
+    new URL(`file://${process.argv[1]}`).pathname;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    logger.error({ err }, 'Failed to start NanoClaw');
+    process.exit(1);
+  });
+}
