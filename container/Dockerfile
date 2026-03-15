@@ -162,9 +162,12 @@ RUN chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
 # Also create .config dir so CLIs (obsidian-cli, etc.) can write config
+# Make /home/node world-writable so the host-UID user (--user flag) can write
+# files like .claude.json there. Container is ephemeral so this is safe.
 RUN chown -R node:node /workspace \
     && mkdir -p /home/node/.config \
-    && chown -R node:node /home/node/.config
+    && chown -R node:node /home/node/.config \
+    && chmod 777 /home/node
 
 # Switch to non-root user (required for --dangerously-skip-permissions)
 USER node

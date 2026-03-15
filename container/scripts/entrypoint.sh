@@ -70,4 +70,18 @@ if command -v spotless >/dev/null 2>&1; then
   fi
 fi
 
+# Ensure $HOME/.claude.json exists (CLI exits silently without it).
+# The file lives at $HOME/.claude.json (outside the mounted .claude/ dir),
+# so it's lost between container runs. Restore from backup or create minimal.
+if [ ! -f "$HOME/.claude.json" ]; then
+  BACKUP=$(ls -t "$HOME/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1)
+  if [ -n "$BACKUP" ]; then
+    cp "$BACKUP" "$HOME/.claude.json"
+    echo "[entrypoint] Restored .claude.json from backup: $BACKUP" >&2
+  else
+    echo '{}' > "$HOME/.claude.json"
+    echo "[entrypoint] Created minimal .claude.json" >&2
+  fi
+fi
+
 node /tmp/dist/index.js < /workspace/ipc/input.json
