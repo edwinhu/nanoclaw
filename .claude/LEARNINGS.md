@@ -156,5 +156,10 @@ Last updated: 2026-03-16 14:12
 - Spotless bypass is an architectural limitation, not a bug to fix: Spotless hardcodes `api.anthropic.com`, so the proxy never sees its requests. The mitigation is ensuring `readSecrets()` provides the freshest token at startup.
 - When mocking fs for credential-proxy tests, only mock `readFileSync` and `writeFileSync` (used by `readFullOAuthCredentials` and `saveOAuthCredentials`). Don't mock the whole module or http server creation breaks.
 ---
-Last updated: 2026-03-16 16:30
+Last updated: 2026-03-16 17:20
+---
+
+[Compaction at 17:26] (workflow: /dev) - Context was summarized
+---
+Last updated: 2026-03-16 17:29
 ---
