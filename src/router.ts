@@ -49,10 +49,13 @@ export async function routeOutbound(
   jid: string,
   text: string,
 ): Promise<void> {
+  const formatted = formatOutbound(jid, text);
+  if (!formatted) return;
+
   const channel = channels.find((c) => c.ownsJid(jid) && c.isConnected());
   if (!channel) {
     logger.warn({ jid }, 'No channel found for JID');
     return;
   }
-  await channel.sendMessage(jid, text);
+  await channel.sendMessage(jid, formatted);
 }
