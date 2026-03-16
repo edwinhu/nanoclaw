@@ -2,7 +2,6 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { WhatsAppChannel } from './channels/whatsapp.js';
 import { TelegramChannel } from './channels/telegram.js';
 import { startCompanionMonitor } from './companion-monitor.js';
 import {
@@ -512,9 +511,8 @@ async function main(): Promise<void> {
       sendMessage: (jid: string, text: string) => routeOutbound(channels, jid, text),
       registeredGroups: () => registeredGroups,
       registerGroup,
-      syncGroups: async (force: boolean) => {
-        const wa = channels.find((ch) => ch.name === 'WhatsApp') as WhatsAppChannel | undefined;
-        if (wa) await wa.syncGroupMetadata(force);
+      syncGroups: async (_force: boolean) => {
+        // WhatsApp removed — group sync not applicable for Telegram
       },
       getAvailableGroups,
       writeGroupsSnapshot,
@@ -525,34 +523,8 @@ async function main(): Promise<void> {
     startMessageLoop();
   };
 
-  if (!TELEGRAM_ONLY) {
-    const whatsapp = new WhatsAppChannel({
-      onConnectionOpen: startServices,
-      onMessage: (chatJid, msg, isFromMe, pushName) => {
-        const content =
-          msg.message?.conversation ||
-          msg.message?.extendedTextMessage?.text ||
-          '';
-        const isBotMessage = isFromMe && content.startsWith(`${ASSISTANT_NAME}:`);
-        storeMessage({
-          id: msg.key?.id || `wa-${Date.now()}`,
-          chat_jid: chatJid,
-          sender: msg.key?.participant || msg.key?.remoteJid || chatJid,
-          sender_name: pushName || 'Unknown',
-          content,
-          timestamp: new Date((msg.messageTimestamp as number) * 1000).toISOString(),
-          is_from_me: isFromMe,
-          is_bot_message: isBotMessage,
-        });
-      },
-      registeredGroups: () => registeredGroups,
-    });
-    channels.push(whatsapp);
-    await whatsapp.connect();
-  } else {
-    startServices();
-    logger.info(`NanoClaw running (Telegram-only, trigger: @${ASSISTANT_NAME})`);
-  }
+  startServices();
+  logger.info(`NanoClaw running (Telegram-only, trigger: @${ASSISTANT_NAME})`);
 }
 
 // Guard: only run when executed directly, not when imported by tests
