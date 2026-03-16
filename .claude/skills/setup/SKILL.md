@@ -58,7 +58,7 @@ Run `bash setup.sh` and parse the status block.
   - macOS: `brew install node@22` (if brew available) or install nvm then `nvm install 22`
   - Linux: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`, or nvm
   - After installing Node, re-run `bash setup.sh`
-- If DEPS_OK=false → Read `logs/setup.log`. Try: delete `node_modules`, re-run `bash setup.sh`. If native module build fails, install build tools (`xcode-select --install` on macOS, `build-essential` on Linux), then retry.
+- If DEPS_OK=false → Read `logs/setup.log`. Try: delete `node_modules`, re-run `bash setup.sh`. If native module build fails, install build tools (`xcode-select --install` on macOS, `build-essential` on Linux), then retry. **Note:** always use `npm install --include=dev` to ensure dev dependencies (TypeScript, Vitest, etc.) are installed — some environments have `omit=dev` set in npm config.
 - If NATIVE_OK=false → better-sqlite3 failed to load. Install build tools and re-run.
 - Record PLATFORM and IS_WSL for later steps.
 
@@ -66,7 +66,6 @@ Run `bash setup.sh` and parse the status block.
 
 Run `npx tsx setup/index.ts --step environment` and parse the status block.
 
-- If HAS_AUTH=true → WhatsApp is already configured, note for step 5
 - If HAS_REGISTERED_GROUPS=true → note existing config, offer to skip or reconfigure
 - Record APPLE_CONTAINER and DOCKER values for step 3
 
@@ -77,16 +76,17 @@ Run `npx tsx setup/index.ts --step environment` and parse the status block.
 Check the preflight results for `APPLE_CONTAINER` and `DOCKER`, and the PLATFORM from step 1.
 
 - PLATFORM=linux → Docker (only option)
-- PLATFORM=macos + APPLE_CONTAINER=installed → Use `AskUserQuestion: Docker (cross-platform) or Apple Container (native macOS)?` If Apple Container, run `/convert-to-apple-container` now, then skip to 3c.
-- PLATFORM=macos + APPLE_CONTAINER=not_found → Docker
+- PLATFORM=macos + APPLE_CONTAINER=installed → Use `AskUserQuestion: Docker/OrbStack (cross-platform) or Apple Container (native macOS)?` If Apple Container, run `/convert-to-apple-container` now, then skip to 3c.
+- PLATFORM=macos + APPLE_CONTAINER=not_found → Docker or OrbStack (preferred on macOS — drop-in Docker replacement with better performance)
 
 ### 3a-docker. Install Docker
 
 - DOCKER=running → continue to 4b
 - DOCKER=installed_not_running → start Docker: `open -a Docker` (macOS) or `sudo systemctl start docker` (Linux). Wait 15s, re-check with `docker info`.
-- DOCKER=not_found → Use `AskUserQuestion: Docker is required for running agents. Would you like me to install it?` If confirmed:
-  - macOS: install via `brew install --cask docker`, then `open -a Docker` and wait for it to start. If brew not available, direct to Docker Desktop download at https://docker.com/products/docker-desktop
-  - Linux: install with `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER`. Note: user may need to log out/in for group membership.
+- DOCKER=not_found → Use `AskUserQuestion: A container runtime is required. On macOS, OrbStack is recommended (faster, lighter than Docker Desktop). Install OrbStack or Docker?` If confirmed:
+  - macOS OrbStack (recommended): `brew install --cask orbstack`, then `open -a OrbStack`. OrbStack provides the `docker` CLI automatically.
+  - macOS Docker Desktop: `brew install --cask docker`, then `open -a Docker` and wait for it to start.
+  - Linux: `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER`. Note: user may need to log out/in for group membership.
 
 ### 3b. Apple Container conversion gate (if needed)
 
@@ -149,7 +149,7 @@ Each skill will:
 **After all channel skills complete**, install dependencies and rebuild — channel merges may introduce new packages:
 
 ```bash
-npm install && npm run build
+npm install --include=dev && npm run build
 ```
 
 If the build fails, read the error output and fix it (usually a missing dependency). Then continue to step 6.

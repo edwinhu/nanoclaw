@@ -1,6 +1,6 @@
 ---
 name: add-telegram
-description: Add Telegram as a channel. Can replace WhatsApp entirely or run alongside it. Also configurable as a control-only channel (triggers actions) or passive channel (receives notifications only).
+description: Add Telegram as a channel. Configurable as a control-only channel (triggers actions) or passive channel (receives notifications only).
 ---
 
 # Add Telegram Channel
@@ -21,49 +21,27 @@ AskUserQuestion: Do you have a Telegram bot token, or do you need to create one?
 
 If they have one, collect it now. If not, we'll create one in Phase 3.
 
-## Phase 2: Apply Code Changes
+## Phase 2: Verify Code Is Present
 
-### Ensure channel remote
+Telegram is built into this fork — no git merge needed. Verify:
 
 ```bash
-git remote -v
+ls src/channels/telegram.ts && grep -q grammy package.json && echo "OK"
 ```
 
-If `telegram` is missing, add it:
+If either is missing (e.g. fresh upstream clone), merge from the skill branch:
 
 ```bash
 git remote add telegram https://github.com/qwibitai/nanoclaw-telegram.git
-```
-
-### Merge the skill branch
-
-```bash
 git fetch telegram main
 git merge telegram/main || {
   git checkout --theirs package-lock.json
   git add package-lock.json
   git merge --continue
 }
-```
-
-This merges in:
-- `src/channels/telegram.ts` (TelegramChannel class with self-registration via `registerChannel`)
-- `src/channels/telegram.test.ts` (unit tests with grammy mock)
-- `import './telegram.js'` appended to the channel barrel file `src/channels/index.ts`
-- `grammy` npm dependency in `package.json`
-- `TELEGRAM_BOT_TOKEN` in `.env.example`
-
-If the merge reports conflicts, resolve them by reading the conflicted files and understanding the intent of both sides.
-
-### Validate code changes
-
-```bash
-npm install
-npm run build
+npm install --include=dev && npm run build
 npx vitest run src/channels/telegram.test.ts
 ```
-
-All tests must pass (including the new Telegram tests) and build must be clean before proceeding.
 
 ## Phase 3: Setup
 
