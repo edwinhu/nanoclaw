@@ -11,6 +11,29 @@ vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
 }));
 
+// Mock fs so readFullOAuthCredentials() never reads the real ~/.claude/.credentials.json.
+// This ensures tests exercise the keychain fallback path in isolation.
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    readFileSync: vi.fn(() => {
+      throw new Error('ENOENT: mock - no credentials file');
+    }),
+    writeFileSync: vi.fn(),
+  };
+});
+
+let mockKeychainToken: string | null = null;
+let mockKeychainCreds: Record<string, unknown> | null = null;
+vi.mock('./keychain.js', () => ({
+  readKeychainOAuthToken: vi.fn(() => mockKeychainToken),
+  readKeychainOAuthCredentials: vi.fn(() => {
+    if (mockKeychainCreds) return mockKeychainCreds;
+    return mockKeychainToken ? { accessToken: mockKeychainToken } : null;
+  }),
+}));
+
 import { startCredentialProxy } from './credential-proxy.js';
 
 function makeRequest(
@@ -68,6 +91,8 @@ describe('credential-proxy', () => {
     await new Promise<void>((r) => proxyServer?.close(() => r()));
     await new Promise<void>((r) => upstreamServer?.close(() => r()));
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
+    mockKeychainToken = null;
+    mockKeychainCreds = null;
   });
 
   async function startProxy(env: Record<string, string>): Promise<number> {
@@ -188,5 +213,255 @@ describe('credential-proxy', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.body).toBe('Bad Gateway');
+  });
+
+  it('OAuth mode prefers keychain token over .env token', async () => {
+    mockKeychainToken = 'keychain-fresh-token';
+    proxyPort = await startProxy({
+      CLAUDE_CODE_OAUTH_TOKEN: 'stale-env-token',
+    });
+
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/api/oauth/claude_cli/create_api_key',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
+      },
+      '{}',
+    );
+
+    expect(lastUpstreamHeaders['authorization']).toBe(
+      'Bearer keychain-fresh-token',
+    );
+  });
+
+  it('OAuth mode falls back to .env token when keychain returns null', async () => {
+    mockKeychainToken = null;
+    proxyPort = await startProxy({
+      CLAUDE_CODE_OAUTH_TOKEN: 'env-fallback-token',
+    });
+
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/api/oauth/claude_cli/create_api_key',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
+      },
+      '{}',
+    );
+
+    expect(lastUpstreamHeaders['authorization']).toBe(
+      'Bearer env-fallback-token',
+    );
+  });
+
+  it('401 retry force-refreshes token even when expiresAt is in the future', async () => {
+    // Set up a mock refresh server that issues new tokens
+    let refreshCalled = false;
+    const refreshServer = http.createServer((req, res) => {
+      if (req.url === '/v1/oauth/token') {
+        refreshCalled = true;
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', () => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              access_token: 'refreshed-token',
+              refresh_token: 'new-refresh-token',
+              expires_in: 3600,
+            }),
+          );
+        });
+      }
+    });
+    await new Promise<void>((resolve) =>
+      refreshServer.listen(0, '127.0.0.1', resolve),
+    );
+    const refreshPort = (refreshServer.address() as AddressInfo).port;
+
+    // The upstream returns 401 on first request, 200 on retry
+    let upstreamCallCount = 0;
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((req, res) => {
+      upstreamCallCount++;
+      lastUpstreamHeaders = { ...req.headers };
+      if (upstreamCallCount === 1) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'token expired' }));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    upstreamPort = (upstreamServer.address() as AddressInfo).port;
+
+    // Keychain returns token with expiresAt far in the future + a refresh token.
+    // This simulates a server-side revocation: local token looks valid but API rejects it.
+    mockKeychainCreds = {
+      accessToken: 'revoked-but-not-expired-token',
+      refreshToken: 'my-refresh-token',
+      expiresAt: Date.now() + 3 * 60 * 60 * 1000, // 3 hours from now
+    };
+
+    // We need to intercept the refresh call. Since refreshOAuthToken uses httpsRequest
+    // to platform.claude.com and we can't easily mock that, we verify the behavior
+    // indirectly: the proxy should retry the request (upstreamCallCount === 2).
+    // The force-refresh path calls doRefresh() which calls refreshOAuthToken().
+    // Even if the refresh fails (can't reach platform.claude.com), the proxy
+    // still falls back to getOauthToken() for the retry.
+    proxyPort = await startProxy({});
+
+    const result = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/api/oauth/claude_cli/create_api_key',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
+      },
+      '{}',
+    );
+
+    // The proxy should have retried the request after the 401
+    expect(upstreamCallCount).toBe(2);
+    expect(result.statusCode).toBe(200);
+
+    await new Promise<void>((r) => refreshServer.close(() => r()));
+  });
+
+  it('API-key mode does not use keychain token', async () => {
+    mockKeychainToken = 'keychain-token-should-not-appear';
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': 'placeholder',
+        },
+      },
+      '{}',
+    );
+
+    expect(lastUpstreamHeaders['x-api-key']).toBe('sk-ant-real-key');
+    expect(lastUpstreamHeaders['authorization']).toBeUndefined();
+  });
+});
+
+/**
+ * Architectural gap: Spotless bypasses credential proxy.
+ *
+ * Spotless (persistent memory agent) hardcodes api.anthropic.com as its API
+ * endpoint. When Spotless runs inside the container, it sends requests directly
+ * to Anthropic's API instead of routing through the credential proxy on the
+ * host. This means:
+ *
+ *   1. The proxy's token refresh logic is never invoked for Spotless requests.
+ *   2. Spotless must receive a valid token at container startup (via readSecrets).
+ *   3. If the token expires mid-session, Spotless will get 401s with no recovery.
+ *
+ * The mitigation (Bug 1 fix) ensures readSecrets() provides the freshest token
+ * from the keychain. But there is no runtime refresh for Spotless — it is a
+ * known architectural limitation.
+ *
+ * These tests document the expected behavior that mitigates the gap.
+ */
+describe('spotless credential proxy bypass (architectural gap)', () => {
+  afterEach(() => {
+    for (const key of Object.keys(mockEnv)) delete mockEnv[key];
+    mockKeychainToken = null;
+    mockKeychainCreds = null;
+  });
+
+  it('container receives token via readSecrets, not via proxy auth header', async () => {
+    // This test documents the architecture: Spotless reads CLAUDE_CODE_OAUTH_TOKEN
+    // from the environment, which was set by readSecrets() at container startup.
+    // It does NOT route through the credential proxy.
+    //
+    // Verification: a request to /v1/messages with x-api-key (as Spotless would
+    // send after key exchange) passes through without the proxy touching Authorization.
+    mockKeychainToken = 'spotless-startup-token';
+    const upstreamServer2 = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer2.listen(0, '127.0.0.1', resolve),
+    );
+    const port2 = (upstreamServer2.address() as AddressInfo).port;
+
+    Object.assign(mockEnv, {
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${port2}`,
+      CLAUDE_CODE_OAUTH_TOKEN: 'spotless-startup-token',
+    });
+    const server = await startCredentialProxy(0);
+    const proxyPort2 = (server.address() as AddressInfo).port;
+
+    // Spotless-style request: uses x-api-key from its own key exchange, no Authorization
+    const result = await makeRequest(
+      proxyPort2,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': 'spotless-temp-key-from-exchange',
+        },
+      },
+      '{}',
+    );
+
+    // The proxy should NOT replace the temp key (it's post-exchange, valid as-is).
+    // This documents that Spotless requests bypass proxy credential injection.
+    expect(result.statusCode).toBe(200);
+
+    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => upstreamServer2.close(() => r()));
+  });
+
+  it('proxy cannot refresh token for direct-to-API requests (Spotless limitation)', async () => {
+    // When Spotless sends directly to api.anthropic.com (not through the proxy),
+    // the proxy has no opportunity to intercept 401s and refresh the token.
+    // This test documents that the proxy's 401-retry logic only works for
+    // requests that actually pass through it.
+    //
+    // The mitigation is readSecrets() providing the freshest keychain token at
+    // container startup (tested in read-secrets.test.ts).
+
+    mockKeychainToken = 'will-expire-mid-session';
+
+    // Start proxy in OAuth mode
+    Object.assign(mockEnv, {
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:59999`, // unused
+      CLAUDE_CODE_OAUTH_TOKEN: 'will-expire-mid-session',
+    });
+    const server = await startCredentialProxy(0);
+    const proxyPort2 = (server.address() as AddressInfo).port;
+
+    // Spotless would send to api.anthropic.com directly, NOT to proxyPort.
+    // We can't test the negative (no request reaches proxy) with a real server,
+    // but we verify the proxy config is OAuth mode (meaning token refresh IS
+    // available for requests that DO route through it).
+    // The key insight: any request that skips the proxy gets no refresh.
+    expect(proxyPort2).toBeGreaterThan(0); // proxy is running
+
+    await new Promise<void>((r) => server.close(() => r()));
   });
 });

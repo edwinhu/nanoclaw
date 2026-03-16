@@ -193,6 +193,14 @@ export function _initTestDatabase(): void {
   createSchema(db);
 }
 
+/** @internal - for tests only. Sets last_run on a task. */
+export function _setTaskLastRunForTests(id: string, lastRun: string): void {
+  db.prepare('UPDATE scheduled_tasks SET last_run = ? WHERE id = ?').run(
+    lastRun,
+    id,
+  );
+}
+
 /**
  * Store chat metadata only (no message content).
  * Used for all chats to enable group discovery without storing sensitive content.

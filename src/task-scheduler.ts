@@ -259,6 +259,10 @@ async function runTask(
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 
+// Minimum interval between cron task runs. Prevents cascading re-triggers
+// when next_run is manually reset (e.g., dry-run-task) or after crash-loop restarts.
+const CRON_MIN_INTERVAL_MS = 5 * 60 * 1000;
+
 let schedulerRunning = false;
 
 // Tasks currently dispatched (running or queued). Prevents the scheduler
@@ -291,6 +295,22 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
         // Re-check task status in case it was paused/cancelled
         const currentTask = getTaskById(task.id);
         if (!currentTask || currentTask.status !== 'active') {
+          continue;
+        }
+
+        // Backstop guard: skip cron tasks that ran within the minimum interval.
+        // The in-memory dispatchedTasks Set is cleared on restart; this DB-backed
+        // check prevents cascading re-triggers from manual next_run resets or crash loops.
+        if (
+          currentTask.schedule_type === 'cron' &&
+          currentTask.last_run &&
+          Date.now() - new Date(currentTask.last_run).getTime() <
+            CRON_MIN_INTERVAL_MS
+        ) {
+          logger.debug(
+            { taskId: currentTask.id, lastRun: currentTask.last_run },
+            'Skipping cron task — ran within minimum interval',
+          );
           continue;
         }
 

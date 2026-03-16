@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _initTestDatabase, createTask, getTaskById } from './db.js';
+import {
+  _initTestDatabase,
+  _setTaskLastRunForTests,
+  createTask,
+  getTaskById,
+} from './db.js';
 import {
   _resetSchedulerLoopForTests,
   computeNextRun,
@@ -95,6 +100,111 @@ describe('task scheduler', () => {
     };
 
     expect(computeNextRun(task)).toBeNull();
+  });
+
+  it('skips cron task that ran within 5 minutes', async () => {
+    const now = Date.now();
+    createTask({
+      id: 'task-cron-recent',
+      group_folder: 'main',
+      chat_jid: 'cron@g.us',
+      prompt: 'wrapup',
+      schedule_type: 'cron',
+      schedule_value: '0 23 * * *',
+      context_mode: 'isolated',
+      next_run: new Date(now - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    _setTaskLastRunForTests(
+      'task-cron-recent',
+      new Date(now - 2 * 60_000).toISOString(),
+    );
+
+    const enqueueTask = vi.fn();
+
+    startSchedulerLoop({
+      registeredGroups: () => ({}),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+      assistantName: 'TestBot',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(enqueueTask).not.toHaveBeenCalled();
+  });
+
+  it('dispatches cron task that ran more than 5 minutes ago', async () => {
+    const now = Date.now();
+    createTask({
+      id: 'task-cron-old',
+      group_folder: 'main',
+      chat_jid: 'cron@g.us',
+      prompt: 'wrapup',
+      schedule_type: 'cron',
+      schedule_value: '0 23 * * *',
+      context_mode: 'isolated',
+      next_run: new Date(now - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    _setTaskLastRunForTests(
+      'task-cron-old',
+      new Date(now - 10 * 60_000).toISOString(),
+    );
+
+    const enqueueTask = vi.fn();
+
+    startSchedulerLoop({
+      registeredGroups: () => ({}),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+      assistantName: 'TestBot',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(enqueueTask).toHaveBeenCalled();
+  });
+
+  it('dispatches non-cron task regardless of last_run', async () => {
+    const now = Date.now();
+    createTask({
+      id: 'task-interval-recent',
+      group_folder: 'main',
+      chat_jid: 'interval@g.us',
+      prompt: 'check',
+      schedule_type: 'interval',
+      schedule_value: '60000',
+      context_mode: 'isolated',
+      next_run: new Date(now - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    _setTaskLastRunForTests(
+      'task-interval-recent',
+      new Date(now - 60_000).toISOString(),
+    );
+
+    const enqueueTask = vi.fn();
+
+    startSchedulerLoop({
+      registeredGroups: () => ({}),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+      assistantName: 'TestBot',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(enqueueTask).toHaveBeenCalled();
   });
 
   it('computeNextRun skips missed intervals without infinite loop', () => {

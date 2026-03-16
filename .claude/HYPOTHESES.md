@@ -1,119 +1,55 @@
 # Debug Hypotheses
 
-## Bug: NanoClaw agent containers produce "Messages: 0" — query() returns empty iterable
-Started: 2026-03-15T19:00
+## Bug: Test coverage gaps for recurring bugs
+Started: 2026-03-16T18:30
 
-## Context
-- Worked yesterday (March 14) with Docker Desktop
-- Today switched to OrbStack
-- OAuth token in .env was replaced with fresh token during debugging
-- Proxy bind address fixed from 127.0.0.1 to 0.0.0.0 for OrbStack compatibility
-- Proxy IS reachable from containers (confirmed via curl)
-- OAuth token exchange returns 403: "OAuth token does not meet scope requirement org:create_api_key"
-- BUT: Claude Code itself uses OAuth and works fine (this very session)
-- SDK version ^0.2.34 resolves to 0.2.68 (same either way)
-- Key question: why does the same OAuth mechanism work for Claude Code but not NanoClaw containers?
+## Symptom
+Four areas lack test coverage that would have caught bugs found during this session:
 
-## What We Know
-- The credential proxy is in OAuth mode (no ANTHROPIC_API_KEY in .env)
-- The proxy replaces placeholder Bearer tokens with the real OAuth token
-- The Agent SDK calls /api/oauth/claude_cli/create_api_key to exchange OAuth for temp API key
-- That endpoint now returns 403 for this token
-- Claude Code on the host works fine with OAuth (running right now)
-- User insists this worked yesterday — and they're right that Claude Code uses the same SDK
+1. **Stale .env token bypasses keychain** — `readSecrets()` in container-runner.ts preferred `.env` token over fresh keychain token. Fixed but no regression test exists.
+2. **401 retry skips refresh when expiresAt is in future** — credential-proxy.ts fixed with some tests, but gaps may remain.
+3. **Spotless bypasses credential proxy** — Spotless hardcodes `api.anthropic.com`, bypassing proxy logic. No integration test.
+4. **group-queue.test.ts failures** — 3 pre-existing tests failing (preemption logic).
+
+## Goal
+Write regression tests for bugs 1-3, fix the 3 failing group-queue tests, confirm full suite passes.
 
 ## Iteration Log
 
-### Iteration 1: Deep Auth Path Analysis (2026-03-15T21:00)
+### Bug 1: Stale .env token bypasses keychain [TESTED]
 
-**Hypothesis:** The Agent SDK calls create_api_key because the OAuth token lacks the org:create_api_key scope, causing "Messages: 0".
+**What was tested:** `readSecrets()` in container-runner.ts now checks keychain before returning .env token. Exported the function (`@internal`) and wrote 5 unit tests in `src/read-secrets.test.ts`:
+1. Prefers keychain token over stale .env token (the regression case)
+2. Falls back to .env when keychain is unavailable
+3. Uses keychain even when .env has no OAuth token
+4. Does not override API key with keychain token
+5. Logs when keychain token differs from .env token
 
-**Investigation:**
+**Regression command:** `npx vitest run src/read-secrets.test.ts`
 
-1. **SDK Auth Logic (v2.1.68 bundled in SDK, v2.1.76 global CLI):**
-   - When `CLAUDE_CODE_OAUTH_TOKEN` env var is set, the SDK's `z4()` function HARDCODES scopes to `["user:inference"]`
-   - The `zB(scopes)` check returns TRUE (user:inference present)
-   - This means the SDK uses DIRECT Bearer auth for /v1/messages, NOT the create_api_key exchange
-   - The create_api_key endpoint is ONLY called during OAuth login flow (installOAuthTokens), not at runtime
+### Bug 2: 401 retry skips refresh when expiresAt is in future [ALREADY TESTED]
 
-2. **Host Claude Code Auth:**
-   - Uses macOS keychain (`Claude Code-credentials`)
-   - Token: same `sk-ant-oat01-oBqM...` token as in .env
-   - Keychain scopes: `["user:inference", "user:mcp_servers", "user:profile", "user:sessions:claude_code"]`
-   - Direct inference works (user:inference scope present)
+**Coverage audit:** The existing test "401 retry force-refreshes token even when expiresAt is in the future" (credential-proxy.test.ts line 253) already covers this case. It sets `expiresAt: Date.now() + 3 * 60 * 60 * 1000` and verifies the proxy retries on 401. Fixed a separate issue: the test file was reading the real `~/.claude/.credentials.json` because `fs.readFileSync` was not mocked, causing 3 test failures. Added an `fs` mock to prevent real filesystem reads.
 
-3. **Container Auth Chain:**
-   - Docker env: `CLAUDE_CODE_OAUTH_TOKEN=placeholder`, `ANTHROPIC_BASE_URL=http://host-gateway:3001`
-   - Entrypoint extracts REAL token from input.json secrets -> exports `CLAUDE_CODE_OAUTH_TOKEN=$REAL_TOKEN`
-   - Spotless starts -> overrides `ANTHROPIC_BASE_URL=http://localhost:9050/agent/clawd`
-   - SDK/CLI sees real token with hardcoded `user:inference` scope
-   - API calls: SDK -> Spotless (localhost:9050) -> api.anthropic.com (HARDCODED in Spotless)
-   - Spotless passes Bearer headers unchanged
+**Regression command:** `npx vitest run src/credential-proxy.test.ts`
 
-4. **Key Finding: Spotless bypasses credential proxy!**
-   - Spotless has `const ANTHROPIC_API_URL = "https://api.anthropic.com"` HARDCODED
-   - When Spotless is running, ALL API calls go directly to api.anthropic.com, NOT through the credential proxy
-   - This is fine for the real token (direct Bearer works) but means the credential proxy is irrelevant when Spotless is active
+### Bug 3: Spotless bypasses credential proxy [DOCUMENTED + TESTED]
 
-5. **create_api_key 403 is a RED HERRING:**
-   - The endpoint returns 403 because the token has `user:inference` scopes (not `org:create_api_key`)
-   - But the SDK NEVER calls this endpoint at runtime when CLAUDE_CODE_OAUTH_TOKEN is set
-   - The 403 only matters if something explicitly hits that endpoint (e.g., manual curl test)
+**What was tested:** Added 2 tests in a new `describe('spotless credential proxy bypass')` block in credential-proxy.test.ts:
+1. Documents that post-exchange requests (like Spotless makes) pass through the proxy without credential injection
+2. Documents that the proxy cannot refresh tokens for requests that skip it entirely
 
-6. **Reproduction Test:**
-   - Ran a FULL entrypoint flow in a fresh container with real secrets
-   - Result: **Messages: 4**, successful response, exit code 0
-   - The "Messages: 0" issue could NOT be reproduced
+These are architectural documentation tests. The real mitigation is Bug 1 (readSecrets provides fresh keychain token at startup).
 
-**Result: REFUTED** - The create_api_key scope issue is NOT the cause of "Messages: 0". The SDK never calls create_api_key when CLAUDE_CODE_OAUTH_TOKEN is set. The auth chain works end-to-end.
+**Regression command:** `npx vitest run src/credential-proxy.test.ts`
 
-**Possible Real Causes (to investigate next):**
-- The "Messages: 0" may have been a transient issue during the Docker Desktop -> OrbStack switch (proxy unreachable briefly)
-- The proxy bind address fix (127.0.0.1 -> 0.0.0.0) may have already resolved the issue
-- All 20+ container logs from today (March 15) show exit code 0 and successful completion
-- The issue may be resolved and no longer reproducible
+### group-queue.test.ts: 3 preemption test failures [FIXED]
 
-### Iteration 2: Missing .claude.json (2026-03-15T20:00)
+**Root cause:** `enqueueTask()` in `group-queue.ts` called `this.closeStdin(groupJid)` unconditionally whenever the container was active (line 109). The tests expected that `_close` is only written when the container is idle (`idleWaiting === true`), not when it is actively processing.
 
-**Hypothesis:** The Claude Code CLI requires `$HOME/.claude.json` to exist. Without it, the CLI subprocess exits immediately with code 0 and zero stdout, causing the SDK's `query()` to yield 0 messages.
+**Fix:** Gated the `closeStdin()` call on `state.idleWaiting`. When the container is busy, the task is queued in `pendingTasks` and will run either when `notifyIdle()` fires (which already checks `pendingTasks` and calls `closeStdin`) or when the container finishes (via `drainGroup`).
 
-**Investigation:**
-
-1. **CLI stderr capture (via manual subprocess spawn test in agent-runner):**
-   ```
-   Claude configuration file not found at: /home/node/.claude.json
-   A backup file exists at: /home/node/.claude/backups/.claude.json.backup.1773604659280
-   You can manually restore it by running: cp "..." "/home/node/.claude.json"
-   ```
-
-2. **Why .claude.json is missing every run:**
-   - Container mounts `data/sessions/main/.claude` -> `/home/node/.claude` (a subdirectory)
-   - CLI expects `.claude.json` at `/home/node/.claude.json` (a file at HOME root)
-   - `/home/node/.claude.json` is on the ephemeral container filesystem, lost between runs
-   - The CLI creates the file on first run, but it's gone next time
-
-3. **Why writing the file fails (first fix attempt):**
-   - Container runs with `--user ${hostUid}:${hostGid}` for bind-mount compatibility
-   - `/home/node/` is owned by UID 1000 (`node` user inside the image)
-   - Host UID is different -> `Permission denied` when writing to `/home/node/.claude.json`
-
-4. **Fix (two-part):**
-   - **Dockerfile:** Added `chmod 777 /home/node` to make home directory writable by any UID
-   - **entrypoint.sh:** Added pre-flight check that restores `.claude.json` from backup or creates `{}` minimal file
-
-5. **Verification:**
-   - Retriggered wrapup task with new image
-   - Container ran for 103 seconds (vs ~52s failures), sent 1404-char message to Telegram
-   - New session ID assigned, exit code 0, streaming mode completed successfully
-
-**Result: CONFIRMED AND FIXED** - Missing `.claude.json` was the root cause. The CLI exits silently (code 0, no stdout) when the config file is absent.
-
-**Root Cause Chain:**
-1. Container image rebuilt (14:55 ET) without `.claude.json` baked in
-2. Every subsequent container: CLI can't find config -> exits silently -> SDK yields 0 messages -> "Messages: 0"
-3. The ~52s duration pattern = 40s entrypoint overhead + instant CLI failure + 10s task close delay
-
-**Files Changed:**
-- `container/Dockerfile` — `chmod 777 /home/node` for host-UID writability
-- `container/scripts/entrypoint.sh` — restore `.claude.json` from backup before running agent
-- `container/agent-runner/src/index.ts` — removed debug logging added during investigation
+**Tests fixed:**
+1. "does NOT preempt active container when not idle" - expects no `_close` when container is busy
+2. "sendMessage resets idleWaiting so a subsequent task enqueue does not preempt" - expects no `_close` after idle reset
+3. "preempts when idle arrives with pending tasks" - expects no `_close` at enqueue time, but `_close` when `notifyIdle` fires

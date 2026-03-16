@@ -27,6 +27,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readKeychainOAuthCredentials } from './keychain.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -366,30 +367,61 @@ function buildVolumeMounts(
  * Read allowed secrets from .env for passing to the container via input JSON.
  * Secrets are never written to disk or mounted as files — they travel in the
  * stdin JSON and are consumed by the agent-runner via SDK env option.
+ *
+ * For OAuth mode: the keychain is the source of truth for the current token.
+ * The .env file may contain a stale token from a previous login. We always
+ * prefer the keychain token over the .env token so containers receive a fresh
+ * credential. This matters because some proxies inside the container (e.g.
+ * Spotless) forward auth headers directly to api.anthropic.com rather than
+ * routing through the credential proxy, so the token must be fresh at the
+ * point it enters the container.
  */
-function readSecrets(): Record<string, string> {
+/** @internal — exported for testing only */
+export function readSecrets(): Record<string, string> {
   const envFile = path.join(process.cwd(), '.env');
-  if (!fs.existsSync(envFile)) return {};
-
   const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
   const secrets: Record<string, string> = {};
-  const content = fs.readFileSync(envFile, 'utf-8');
 
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx === -1) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    if (!allowedVars.includes(key)) continue;
-    let value = trimmed.slice(eqIdx + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
+  if (fs.existsSync(envFile)) {
+    const content = fs.readFileSync(envFile, 'utf-8');
+
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      if (!allowedVars.includes(key)) continue;
+      let value = trimmed.slice(eqIdx + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      if (value) secrets[key] = value;
     }
-    if (value) secrets[key] = value;
+  }
+
+  // In OAuth mode: prefer keychain token over .env token.
+  // The keychain holds the token that Claude Code CLI last refreshed, which
+  // may be newer than the static value in .env. Since Spotless (and similar
+  // in-container proxies) forward auth directly to api.anthropic.com, the
+  // container receives the token verbatim — it must be fresh.
+  if (!secrets['ANTHROPIC_API_KEY']) {
+    try {
+      const keychainCreds = readKeychainOAuthCredentials();
+      if (keychainCreds?.accessToken) {
+        if (keychainCreds.accessToken !== secrets['CLAUDE_CODE_OAUTH_TOKEN']) {
+          logger.info(
+            'readSecrets: using keychain OAuth token (newer than .env)',
+          );
+        }
+        secrets['CLAUDE_CODE_OAUTH_TOKEN'] = keychainCreds.accessToken;
+      }
+    } catch {
+      // keychain unavailable — fall back to .env token
+    }
   }
 
   // Also inject Readwise token if available (for librarian skill)

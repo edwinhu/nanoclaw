@@ -127,5 +127,34 @@ Last updated: 2026-03-15 14:51
 
 [Compaction at 16:07] (workflow: /dev) - Context was summarized
 ---
-Last updated: 2026-03-15 18:22
+Last updated: 2026-03-15 23:04
+---
+
+## Task: Fix `<internal>` tag leaking into Telegram [COMPLETE]
+
+### What was done
+- Root cause: `routeOutbound()` in `src/router.ts` sent text to `channel.sendMessage()` without calling `formatOutbound()`/`stripInternalTags()`. The task scheduler and IPC message paths both used `routeOutbound` directly, bypassing tag stripping.
+- Fix: Made `routeOutbound()` always call `formatOutbound()` before sending, making tag stripping a guarantee at the single egress point.
+
+### Key discovery
+- The regular message path (`processGroupMessages`) manually stripped tags before calling `routeOutbound`, but the task scheduler and IPC paths did not. Defense-in-depth at the egress point prevents this class of bug.
+---
+Last updated: 2026-03-16 14:12
+---
+
+## Task: Regression tests for credential bugs [COMPLETE]
+
+### What was done
+- Added fs mock to credential-proxy.test.ts to prevent reading real `~/.claude/.credentials.json` (fixed 3 test failures)
+- Exported `readSecrets()` from container-runner.ts (`@internal`) for direct testing
+- Created `src/read-secrets.test.ts` with 5 tests covering keychain-over-.env preference
+- Added 2 architectural documentation tests for Spotless proxy bypass in credential-proxy.test.ts
+- Total: 7 new tests, 3 existing tests fixed
+
+### Key discoveries
+- credential-proxy.test.ts was reading real filesystem: `readFullOAuthCredentials()` reads `~/.claude/.credentials.json` with `readFileSync` from 'fs', which was not mocked. Tests passed on CI (no credentials file) but failed locally. Always mock fs in credential tests.
+- Spotless bypass is an architectural limitation, not a bug to fix: Spotless hardcodes `api.anthropic.com`, so the proxy never sees its requests. The mitigation is ensuring `readSecrets()` provides the freshest token at startup.
+- When mocking fs for credential-proxy tests, only mock `readFileSync` and `writeFileSync` (used by `readFullOAuthCredentials` and `saveOAuthCredentials`). Don't mock the whole module or http server creation breaks.
+---
+Last updated: 2026-03-16 16:30
 ---
