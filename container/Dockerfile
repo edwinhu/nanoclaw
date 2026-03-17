@@ -141,6 +141,23 @@ RUN node /tmp/spotless-digest-filter.js \
       "$(dirname $(readlink -f $(which spotless)))/digest-prompt.ts" \
     && rm /tmp/spotless-digest-filter.js
 
+# Patch spotless: strip experimental beta body fields (context_management, output_config)
+# that cause 400 errors when Spotless rewrites the request body.
+# See: https://github.com/anthropics/claude-code/issues/21612
+COPY patches/spotless-strip-beta-fields.js /tmp/spotless-strip-beta-fields.js
+RUN node /tmp/spotless-strip-beta-fields.js \
+      "$(dirname $(readlink -f $(which spotless)))/proxy.ts" \
+    && rm /tmp/spotless-strip-beta-fields.js
+
+# Patch spotless: fix billing header ordering in system prompt.
+# The claude-code-20250219 beta requires x-anthropic-billing-header
+# to be the first system block. Without this patch, augmentSystemPrompt()
+# prepends the Spotless orientation block before it, causing 400 errors.
+COPY patches/spotless-billing-header-order.js /tmp/spotless-billing-header-order.js
+RUN node /tmp/spotless-billing-header-order.js \
+      "$(dirname $(readlink -f $(which spotless)))/proxy.ts" \
+    && rm /tmp/spotless-billing-header-order.js
+
 # Copy CDP helper script
 COPY scripts/cdp-browser /usr/local/bin/cdp-browser
 RUN chmod +x /usr/local/bin/cdp-browser

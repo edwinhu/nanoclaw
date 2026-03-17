@@ -49,7 +49,13 @@ import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
 import { logger } from './logger.js';
 import { initMatrixTyping, setMatrixTyping } from './matrix-typing.js';
-import { findChannel, formatMessages, formatOutbound, routeOutbound, stripInternalTags } from './router.js';
+import {
+  findChannel,
+  formatMessages,
+  formatOutbound,
+  routeOutbound,
+  stripInternalTags,
+} from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { TypingManager } from './typing.js';
@@ -94,7 +100,10 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   const groupDir = path.join(GROUPS_DIR, group.folder);
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
-  logger.info({ jid, name: group.name, folder: group.folder }, 'Group registered');
+  logger.info(
+    { jid, name: group.name, folder: group.folder },
+    'Group registered',
+  );
 }
 
 export function getAvailableGroups(): import('./container-runner.js').AvailableGroup[] {
@@ -102,7 +111,11 @@ export function getAvailableGroups(): import('./container-runner.js').AvailableG
   const registeredJids = new Set(Object.keys(registeredGroups));
 
   return chats
-    .filter((c) => c.jid !== '__group_sync__' && (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:')))
+    .filter(
+      (c) =>
+        c.jid !== '__group_sync__' &&
+        (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:')),
+    )
     .map((c) => ({
       jid: c.jid,
       name: c.name,
@@ -112,7 +125,9 @@ export function getAvailableGroups(): import('./container-runner.js').AvailableG
 }
 
 /** @internal Test helper — do NOT use in production code. */
-export function _setRegisteredGroups(groups: Record<string, RegisteredGroup>): void {
+export function _setRegisteredGroups(
+  groups: Record<string, RegisteredGroup>,
+): void {
   registeredGroups = groups;
 }
 
@@ -122,26 +137,39 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const isMainGroup = group.isMain === true;
   const previousCursor = lastAgentTimestamp[chatJid] || '';
-  const missedMessages = getMessagesSince(chatJid, previousCursor, ASSISTANT_NAME);
+  const missedMessages = getMessagesSince(
+    chatJid,
+    previousCursor,
+    ASSISTANT_NAME,
+  );
 
   if (missedMessages.length === 0) return true;
 
   if (!isMainGroup && group.requiresTrigger !== false) {
-    const hasTrigger = missedMessages.some((m) => TRIGGER_PATTERN.test(m.content.trim()));
+    const hasTrigger = missedMessages.some((m) =>
+      TRIGGER_PATTERN.test(m.content.trim()),
+    );
     if (!hasTrigger) return true;
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
-  lastAgentTimestamp[chatJid] = missedMessages[missedMessages.length - 1].timestamp;
+  lastAgentTimestamp[chatJid] =
+    missedMessages[missedMessages.length - 1].timestamp;
   saveState();
 
-  logger.info({ group: group.name, messageCount: missedMessages.length }, 'Processing messages');
+  logger.info(
+    { group: group.name, messageCount: missedMessages.length },
+    'Processing messages',
+  );
 
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   const resetIdleTimer = () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      logger.debug({ group: group.name }, 'Idle timeout, closing container stdin');
+      logger.debug(
+        { group: group.name },
+        'Idle timeout, closing container stdin',
+      );
       typingManager.stop(chatJid);
       queue.closeStdin(chatJid);
     }, IDLE_TIMEOUT);
@@ -156,9 +184,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       typingManager.stop(chatJid);
 
       if (result.result) {
-        const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
         const text = stripInternalTags(raw);
-        logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
+        );
         if (text) {
           const formatted = formatOutbound(chatJid, text);
           await routeOutbound(channels, chatJid, formatted);
@@ -178,11 +212,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (hadError) {
     if (isShuttingDown) {
-      logger.warn({ group: group.name }, 'Agent error during shutdown, cursor not rolled back');
+      logger.warn(
+        { group: group.name },
+        'Agent error during shutdown, cursor not rolled back',
+      );
       return false;
     }
     if (outputSent) {
-      logger.warn({ group: group.name }, 'Agent error after output was sent, cursor NOT rolled back');
+      logger.warn(
+        { group: group.name },
+        'Agent error after output was sent, cursor NOT rolled back',
+      );
       return false;
     }
     lastAgentTimestamp[chatJid] = previousCursor;
@@ -222,34 +262,49 @@ async function runAgent(
   );
 
   const availableGroups = getAvailableGroups();
-  writeGroupsSnapshot(group.folder, isMain, availableGroups, new Set(Object.keys(registeredGroups)));
+  writeGroupsSnapshot(
+    group.folder,
+    isMain,
+    availableGroups,
+    new Set(Object.keys(registeredGroups)),
+  );
 
   function saveSession(sessionId: string): void {
     sessions[group.folder] = sessionId;
     setSession(group.folder, sessionId);
   }
 
-  const wrappedOnOutput = onOutput
-    ? async (output: ContainerOutput) => {
-        if (output.newSessionId) saveSession(output.newSessionId);
-        await onOutput(output);
-      }
-    : undefined;
+  // Track the latest session ID from streaming output, but don't persist
+  // until the container exits successfully. Failed containers (e.g.
+  // error_during_execution) must NOT leave a stale session in the DB or
+  // every subsequent run will try to resume the corrupt session.
+  let pendingSessionId: string | undefined;
+
+  const wrappedOnOutput = async (output: ContainerOutput) => {
+    if (output.newSessionId) pendingSessionId = output.newSessionId;
+    if (onOutput) await onOutput(output);
+  };
 
   try {
     const output = await runContainerAgent(
       group,
       { prompt, sessionId, groupFolder: group.folder, chatJid, isMain },
-      (proc, containerName) => queue.registerProcess(chatJid, proc, containerName, group.folder),
+      (proc, containerName) =>
+        queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) saveSession(output.newSessionId);
-
     if (output.status === 'error') {
-      logger.error({ group: group.name, error: output.error }, 'Container agent error');
+      logger.error(
+        { group: group.name, error: output.error },
+        'Container agent error — session NOT persisted',
+      );
       return 'error';
     }
+
+    // Only persist session ID after successful completion
+    const finalSessionId = output.newSessionId || pendingSessionId;
+    if (finalSessionId) saveSession(finalSessionId);
 
     return 'success';
   } catch (err) {
@@ -270,7 +325,11 @@ async function startMessageLoop(): Promise<void> {
   while (true) {
     try {
       const jids = Object.keys(registeredGroups);
-      const { messages, newTimestamp } = getNewMessages(jids, lastTimestamp, ASSISTANT_NAME);
+      const { messages, newTimestamp } = getNewMessages(
+        jids,
+        lastTimestamp,
+        ASSISTANT_NAME,
+      );
 
       if (messages.length > 0) {
         logger.info({ count: messages.length }, 'New messages');
@@ -299,18 +358,29 @@ async function startMessageLoop(): Promise<void> {
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           if (needsTrigger) {
-            const hasTrigger = groupMessages.some((m) => TRIGGER_PATTERN.test(m.content.trim()));
+            const hasTrigger = groupMessages.some((m) =>
+              TRIGGER_PATTERN.test(m.content.trim()),
+            );
             if (!hasTrigger) continue;
           }
 
-          const allPending = getMessagesSince(chatJid, lastAgentTimestamp[chatJid] || '', ASSISTANT_NAME);
-          const messagesToSend = allPending.length > 0 ? allPending : groupMessages;
+          const allPending = getMessagesSince(
+            chatJid,
+            lastAgentTimestamp[chatJid] || '',
+            ASSISTANT_NAME,
+          );
+          const messagesToSend =
+            allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
             typingManager.start(chatJid);
-            logger.debug({ chatJid, count: messagesToSend.length }, 'Piped messages to active container');
-            lastAgentTimestamp[chatJid] = messagesToSend[messagesToSend.length - 1].timestamp;
+            logger.debug(
+              { chatJid, count: messagesToSend.length },
+              'Piped messages to active container',
+            );
+            lastAgentTimestamp[chatJid] =
+              messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
             // Show typing indicator while the container processes the piped message
             channel
@@ -335,7 +405,10 @@ function recoverPendingMessages(): void {
     const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
     const pending = getMessagesSince(chatJid, sinceTimestamp, ASSISTANT_NAME);
     if (pending.length > 0) {
-      logger.info({ group: group.name, pendingCount: pending.length }, 'Recovery: found unprocessed messages');
+      logger.info(
+        { group: group.name, pendingCount: pending.length },
+        'Recovery: found unprocessed messages',
+      );
       queue.enqueueMessageCheck(chatJid);
     }
   }
@@ -369,18 +442,29 @@ function ensureDockerRunning(): void {
   }
 
   try {
-    const output = execSync('docker ps --filter "name=nanoclaw-" --format "{{.Names}}"', {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-    });
-    const orphans = output.trim().split('\n').filter((n) => n);
+    const output = execSync(
+      'docker ps --filter "name=nanoclaw-" --format "{{.Names}}"',
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        encoding: 'utf-8',
+      },
+    );
+    const orphans = output
+      .trim()
+      .split('\n')
+      .filter((n) => n);
     for (const name of orphans) {
       try {
         execSync(`docker stop ${name}`, { stdio: 'pipe' });
-      } catch { /* already stopped */ }
+      } catch {
+        /* already stopped */
+      }
     }
     if (orphans.length > 0) {
-      logger.info({ count: orphans.length, names: orphans }, 'Stopped orphaned containers');
+      logger.info(
+        { count: orphans.length, names: orphans },
+        'Stopped orphaned containers',
+      );
     }
   } catch (err) {
     logger.warn({ err }, 'Failed to clean up orphaned containers');
@@ -470,12 +554,14 @@ async function main(): Promise<void> {
   // Create TypingManager that routes through channels
   typingManager = new TypingManager(
     async (jid) => {
-      await (findChannel(channels, jid)?.setTyping?.(jid, true) ?? Promise.resolve());
+      await (findChannel(channels, jid)?.setTyping?.(jid, true) ??
+        Promise.resolve());
       if (jid.startsWith('tg:')) setMatrixTyping(jid, true);
     },
     4000,
     async (jid) => {
-      await (findChannel(channels, jid)?.setTyping?.(jid, false) ?? Promise.resolve());
+      await (findChannel(channels, jid)?.setTyping?.(jid, false) ??
+        Promise.resolve());
       if (jid.startsWith('tg:')) setMatrixTyping(jid, false);
     },
   );
@@ -487,7 +573,8 @@ async function main(): Promise<void> {
 
   // Start companion session monitor
   startCompanionMonitor({
-    sendMessage: (jid: string, text: string) => routeOutbound(channels, jid, text),
+    sendMessage: (jid: string, text: string) =>
+      routeOutbound(channels, jid, text),
   });
 
   // Common service startup (called by WhatsApp on connect, or immediately in TG-only mode)
@@ -502,13 +589,15 @@ async function main(): Promise<void> {
       queue,
       onProcess: (groupJid, proc, containerName, groupFolder) =>
         queue.registerProcess(groupJid, proc, containerName, groupFolder),
-      sendMessage: (jid: string, text: string) => routeOutbound(channels, jid, text),
+      sendMessage: (jid: string, text: string) =>
+        routeOutbound(channels, jid, text),
       assistantName: ASSISTANT_NAME,
       typingManager,
     });
 
     startIpcWatcher({
-      sendMessage: (jid: string, text: string) => routeOutbound(channels, jid, text),
+      sendMessage: (jid: string, text: string) =>
+        routeOutbound(channels, jid, text),
       registeredGroups: () => registeredGroups,
       registerGroup,
       syncGroups: async (_force: boolean) => {

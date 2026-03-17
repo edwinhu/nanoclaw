@@ -10,7 +10,10 @@ const peerToRoom = new Map<string, string>();
 let initialized = false;
 let telegramBotId = '';
 
-async function matrixFetch(path: string, options?: RequestInit): Promise<Response> {
+async function matrixFetch(
+  path: string,
+  options?: RequestInit,
+): Promise<Response> {
   const url = `${MATRIX_HOMESERVER}${path}`;
   return fetch(url, {
     ...options,
@@ -44,7 +47,10 @@ export async function initMatrixTyping(botId?: string): Promise<void> {
     // Validate token and get user ID
     const whoamiRes = await matrixFetch('/_matrix/client/v3/account/whoami');
     if (!whoamiRes.ok) {
-      logger.warn({ status: whoamiRes.status }, 'Matrix token validation failed');
+      logger.warn(
+        { status: whoamiRes.status },
+        'Matrix token validation failed',
+      );
       return;
     }
     const whoami = (await whoamiRes.json()) as { user_id: string };
@@ -80,7 +86,8 @@ export async function initMatrixTyping(botId?: string): Promise<void> {
         for (const event of events) {
           if (event.type !== 'm.bridge') continue;
           const content = event.content;
-          const bridgeName = content['com.beeper.bridge_name'] || content.protocol?.id || '';
+          const bridgeName =
+            content['com.beeper.bridge_name'] || content.protocol?.id || '';
           if (bridgeName !== 'telegram') continue;
 
           isTelegramBridge = true;
@@ -111,7 +118,10 @@ export async function initMatrixTyping(botId?: string): Promise<void> {
         }
 
         if (channelPeerId) {
-          logger.debug({ peerId: channelPeerId, roomId }, 'Mapped Telegram peer to Matrix room');
+          logger.debug(
+            { peerId: channelPeerId, roomId },
+            'Mapped Telegram peer to Matrix room',
+          );
         }
       } catch (err) {
         logger.debug({ roomId, err }, 'Failed to fetch room state');
@@ -120,11 +130,18 @@ export async function initMatrixTyping(botId?: string): Promise<void> {
 
     initialized = true;
     logger.info(
-      { peerMappings: peerToRoom.size, ghostMappings: ghostToRoom.size, totalRooms: rooms.joined_rooms.length },
+      {
+        peerMappings: peerToRoom.size,
+        ghostMappings: ghostToRoom.size,
+        totalRooms: rooms.joined_rooms.length,
+      },
       'Matrix typing initialized',
     );
   } catch (err) {
-    logger.warn({ err }, 'Matrix typing init failed, falling back to Telegram-only');
+    logger.warn(
+      { err },
+      'Matrix typing init failed, falling back to Telegram-only',
+    );
   }
 }
 
@@ -175,7 +192,16 @@ export async function setMatrixTyping(
   const tgChatId = chatJid.replace(/^tg:/, '');
   const roomId = resolveRoom(tgChatId);
   if (!roomId) {
-    logger.warn({ chatJid, tgChatId, botId: telegramBotId, peerKeys: [...peerToRoom.keys()], ghostKeys: [...ghostToRoom.keys()] }, 'No Matrix room mapping for Telegram chat');
+    logger.warn(
+      {
+        chatJid,
+        tgChatId,
+        botId: telegramBotId,
+        peerKeys: [...peerToRoom.keys()],
+        ghostKeys: [...ghostToRoom.keys()],
+      },
+      'No Matrix room mapping for Telegram chat',
+    );
     return;
   }
 
@@ -185,18 +211,22 @@ export async function setMatrixTyping(
       {
         method: 'PUT',
         body: JSON.stringify(
-          isTyping
-            ? { typing: true, timeout: 15000 }
-            : { typing: false },
+          isTyping ? { typing: true, timeout: 15000 } : { typing: false },
         ),
       },
     );
 
     if (res.ok) {
-      logger.info({ chatJid, roomId: roomId.slice(0, 20), isTyping }, 'Matrix typing sent');
+      logger.info(
+        { chatJid, roomId: roomId.slice(0, 20), isTyping },
+        'Matrix typing sent',
+      );
     } else {
       const body = await res.text().catch(() => '');
-      logger.warn({ roomId, status: res.status, body: body.slice(0, 200) }, 'Matrix typing request failed');
+      logger.warn(
+        { roomId, status: res.status, body: body.slice(0, 200) },
+        'Matrix typing request failed',
+      );
     }
   } catch (err) {
     logger.warn({ chatJid, err }, 'Matrix typing error');

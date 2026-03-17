@@ -111,6 +111,53 @@ function emitOutputMarker(
   proc.stdout.push(`${OUTPUT_START_MARKER}\n${json}\n${OUTPUT_END_MARKER}\n`);
 }
 
+describe('container-runner env vars', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('passes CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 to container', async () => {
+    const { spawn } = await import('child_process');
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Let it initialize
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Get the spawn call args
+    const spawnCall = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+    const args: string[] = spawnCall[1];
+
+    // Verify adaptive thinking is disabled
+    const adaptiveIdx = args.indexOf('CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1');
+    expect(adaptiveIdx).toBeGreaterThan(-1);
+    // The -e flag should precede the env var
+    expect(args[adaptiveIdx - 1]).toBe('-e');
+
+    // Also verify experimental betas is disabled
+    const betasIdx = args.indexOf('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1');
+    expect(betasIdx).toBeGreaterThan(-1);
+    expect(args[betasIdx - 1]).toBe('-e');
+
+    // Clean up: emit output and close
+    emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+  });
+});
+
 describe('container-runner timeout behavior', () => {
   beforeEach(() => {
     vi.useFakeTimers();

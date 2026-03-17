@@ -25,7 +25,12 @@ const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export interface WhatsAppDeps {
   onConnectionOpen: () => void;
-  onMessage: (chatJid: string, msg: proto.IWebMessageInfo, isFromMe: boolean, pushName?: string) => void;
+  onMessage: (
+    chatJid: string,
+    msg: proto.IWebMessageInfo,
+    isFromMe: boolean,
+    pushName?: string,
+  ) => void;
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
@@ -60,7 +65,8 @@ export class WhatsAppChannel implements Channel {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        const msg = 'WhatsApp authentication required. Run /setup in Claude Code.';
+        const msg =
+          'WhatsApp authentication required. Run /setup in Claude Code.';
         logger.error(msg);
         exec(
           `osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`,
@@ -72,7 +78,14 @@ export class WhatsAppChannel implements Channel {
         this.connected = false;
         const reason = (lastDisconnect?.error as any)?.output?.statusCode;
         const shouldReconnect = reason !== DisconnectReason.loggedOut;
-        logger.info({ reason, shouldReconnect, queuedMessages: this.outgoingQueue.length }, 'Connection closed');
+        logger.info(
+          {
+            reason,
+            shouldReconnect,
+            queuedMessages: this.outgoingQueue.length,
+          },
+          'Connection closed',
+        );
 
         if (shouldReconnect) {
           logger.info('Reconnecting...');
@@ -141,7 +154,12 @@ export class WhatsAppChannel implements Channel {
 
         const groups = this.deps.registeredGroups();
         if (groups[chatJid]) {
-          this.deps.onMessage(chatJid, msg, msg.key.fromMe || false, msg.pushName || undefined);
+          this.deps.onMessage(
+            chatJid,
+            msg,
+            msg.key.fromMe || false,
+            msg.pushName || undefined,
+          );
         }
       }
     });
@@ -150,7 +168,10 @@ export class WhatsAppChannel implements Channel {
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.connected) {
       this.outgoingQueue.push({ jid, text });
-      logger.info({ jid, length: text.length, queueSize: this.outgoingQueue.length }, 'WA disconnected, message queued');
+      logger.info(
+        { jid, length: text.length, queueSize: this.outgoingQueue.length },
+        'WA disconnected, message queued',
+      );
       return;
     }
     try {
@@ -158,7 +179,10 @@ export class WhatsAppChannel implements Channel {
       logger.info({ jid, length: text.length }, 'Message sent');
     } catch (err) {
       this.outgoingQueue.push({ jid, text });
-      logger.warn({ jid, err, queueSize: this.outgoingQueue.length }, 'Failed to send, message queued');
+      logger.warn(
+        { jid, err, queueSize: this.outgoingQueue.length },
+        'Failed to send, message queued',
+      );
     }
   }
 
@@ -167,7 +191,11 @@ export class WhatsAppChannel implements Channel {
   }
 
   ownsJid(jid: string): boolean {
-    return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@g.us') || jid.endsWith('@lid');
+    return (
+      jid.endsWith('@s.whatsapp.net') ||
+      jid.endsWith('@g.us') ||
+      jid.endsWith('@lid')
+    );
   }
 
   async disconnect(): Promise<void> {
@@ -176,7 +204,10 @@ export class WhatsAppChannel implements Channel {
 
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     try {
-      await this.sock.sendPresenceUpdate(isTyping ? 'composing' : 'paused', jid);
+      await this.sock.sendPresenceUpdate(
+        isTyping ? 'composing' : 'paused',
+        jid,
+      );
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to update typing status');
     }
@@ -220,7 +251,10 @@ export class WhatsAppChannel implements Channel {
     // Check cached LID→phone map first
     const cached = this.lidToPhoneMap[lidUser];
     if (cached) {
-      logger.debug({ lidJid: jid, phoneJid: cached }, 'Translated LID via cache');
+      logger.debug(
+        { lidJid: jid, phoneJid: cached },
+        'Translated LID via cache',
+      );
       return cached;
     }
 
@@ -230,7 +264,10 @@ export class WhatsAppChannel implements Channel {
       if (pn) {
         const phoneJid = pn.split(':')[0] + '@s.whatsapp.net';
         this.lidToPhoneMap[lidUser] = phoneJid;
-        logger.debug({ lidJid: jid, phoneJid }, 'Translated LID via signalRepository');
+        logger.debug(
+          { lidJid: jid, phoneJid },
+          'Translated LID via signalRepository',
+        );
         return phoneJid;
       }
     } catch (err) {
@@ -244,7 +281,10 @@ export class WhatsAppChannel implements Channel {
     if (this.flushing || this.outgoingQueue.length === 0) return;
     this.flushing = true;
     try {
-      logger.info({ count: this.outgoingQueue.length }, 'Flushing outgoing message queue');
+      logger.info(
+        { count: this.outgoingQueue.length },
+        'Flushing outgoing message queue',
+      );
       while (this.outgoingQueue.length > 0) {
         const item = this.outgoingQueue.shift()!;
         await this.sendMessage(item.jid, item.text);

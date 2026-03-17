@@ -52,14 +52,25 @@ const GROUP = 'test-group';
 const SESSION_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
 function jsonlDir(): string {
-  return path.join(DATA_DIR, 'sessions', GROUP, '.claude', 'projects', '-workspace-group');
+  return path.join(
+    DATA_DIR,
+    'sessions',
+    GROUP,
+    '.claude',
+    'projects',
+    '-workspace-group',
+  );
 }
 
 function jsonlPath(): string {
   return path.join(jsonlDir(), `${SESSION_ID}.jsonl`);
 }
 
-function makeEntry(type: string, subtype?: string, extra?: Record<string, unknown>): string {
+function makeEntry(
+  type: string,
+  subtype?: string,
+  extra?: Record<string, unknown>,
+): string {
   return JSON.stringify({
     type,
     ...(subtype ? { subtype } : {}),
@@ -100,7 +111,12 @@ describe('truncateSessionJsonl', () => {
   });
 
   afterEach(() => {
-    try { fs.rmSync(path.join(DATA_DIR, 'sessions'), { recursive: true, force: true }); } catch {}
+    try {
+      fs.rmSync(path.join(DATA_DIR, 'sessions'), {
+        recursive: true,
+        force: true,
+      });
+    } catch {}
     vi.clearAllMocks();
   });
 
@@ -137,12 +153,19 @@ describe('truncateSessionJsonl', () => {
     const preCompactLines: string[] = [];
     // Generate enough data to exceed 2MB
     for (let i = 0; i < 500; i++) {
-      preCompactLines.push(makeEntry('user', undefined, {
-        message: { role: 'user', content: 'x'.repeat(2000) },
-      }));
-      preCompactLines.push(makeEntry('assistant', undefined, {
-        message: { role: 'assistant', content: [{ type: 'text', text: 'y'.repeat(2000) }] },
-      }));
+      preCompactLines.push(
+        makeEntry('user', undefined, {
+          message: { role: 'user', content: 'x'.repeat(2000) },
+        }),
+      );
+      preCompactLines.push(
+        makeEntry('assistant', undefined, {
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'y'.repeat(2000) }],
+          },
+        }),
+      );
     }
 
     const compactLine = makeCompactBoundary();
@@ -150,15 +173,27 @@ describe('truncateSessionJsonl', () => {
 
     const postCompactLines: string[] = [];
     for (let i = 0; i < 10; i++) {
-      postCompactLines.push(makeEntry('user', undefined, {
-        message: { role: 'user', content: `post-compact message ${i}` },
-      }));
-      postCompactLines.push(makeEntry('assistant', undefined, {
-        message: { role: 'assistant', content: [{ type: 'text', text: `response ${i}` }] },
-      }));
+      postCompactLines.push(
+        makeEntry('user', undefined, {
+          message: { role: 'user', content: `post-compact message ${i}` },
+        }),
+      );
+      postCompactLines.push(
+        makeEntry('assistant', undefined, {
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: `response ${i}` }],
+          },
+        }),
+      );
     }
 
-    const allLines = [...preCompactLines, compactLine, summaryLine, ...postCompactLines];
+    const allLines = [
+      ...preCompactLines,
+      compactLine,
+      summaryLine,
+      ...postCompactLines,
+    ];
     fs.writeFileSync(jsonlPath(), allLines.join('\n'));
 
     const originalSize = fs.statSync(jsonlPath()).size;
@@ -168,7 +203,7 @@ describe('truncateSessionJsonl', () => {
 
     // File should now start with the compact_boundary
     const truncatedContent = fs.readFileSync(jsonlPath(), 'utf-8');
-    const truncatedLines = truncatedContent.split('\n').filter(l => l.trim());
+    const truncatedLines = truncatedContent.split('\n').filter((l) => l.trim());
 
     // First line should be the compact_boundary
     const firstEntry = JSON.parse(truncatedLines[0]);
@@ -196,12 +231,19 @@ describe('truncateSessionJsonl', () => {
     // Large file but no compaction happened yet
     const lines: string[] = [];
     for (let i = 0; i < 500; i++) {
-      lines.push(makeEntry('user', undefined, {
-        message: { role: 'user', content: 'x'.repeat(2000) },
-      }));
-      lines.push(makeEntry('assistant', undefined, {
-        message: { role: 'assistant', content: [{ type: 'text', text: 'y'.repeat(2000) }] },
-      }));
+      lines.push(
+        makeEntry('user', undefined, {
+          message: { role: 'user', content: 'x'.repeat(2000) },
+        }),
+      );
+      lines.push(
+        makeEntry('assistant', undefined, {
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'y'.repeat(2000) }],
+          },
+        }),
+      );
     }
     fs.writeFileSync(jsonlPath(), lines.join('\n'));
 
@@ -216,27 +258,33 @@ describe('truncateSessionJsonl', () => {
     // Build file with two compact boundaries
     const earlyLines: string[] = [];
     for (let i = 0; i < 300; i++) {
-      earlyLines.push(makeEntry('user', undefined, {
-        message: { role: 'user', content: 'early'.repeat(2000) },
-      }));
+      earlyLines.push(
+        makeEntry('user', undefined, {
+          message: { role: 'user', content: 'early'.repeat(2000) },
+        }),
+      );
     }
     const firstCompact = makeCompactBoundary();
     const firstSummary = makeCompactSummary();
 
     const middleLines: string[] = [];
     for (let i = 0; i < 300; i++) {
-      middleLines.push(makeEntry('user', undefined, {
-        message: { role: 'user', content: 'middle'.repeat(2000) },
-      }));
+      middleLines.push(
+        makeEntry('user', undefined, {
+          message: { role: 'user', content: 'middle'.repeat(2000) },
+        }),
+      );
     }
     const secondCompact = makeCompactBoundary();
     const secondSummary = makeCompactSummary();
 
     const postLines: string[] = [];
     for (let i = 0; i < 5; i++) {
-      postLines.push(makeEntry('user', undefined, {
-        message: { role: 'user', content: `final message ${i}` },
-      }));
+      postLines.push(
+        makeEntry('user', undefined, {
+          message: { role: 'user', content: `final message ${i}` },
+        }),
+      );
     }
 
     const allLines = [
@@ -256,7 +304,7 @@ describe('truncateSessionJsonl', () => {
     truncateSessionJsonl(GROUP, SESSION_ID);
 
     const truncatedContent = fs.readFileSync(jsonlPath(), 'utf-8');
-    const truncatedLines = truncatedContent.split('\n').filter(l => l.trim());
+    const truncatedLines = truncatedContent.split('\n').filter((l) => l.trim());
 
     // Should start with the SECOND compact_boundary
     const firstEntry = JSON.parse(truncatedLines[0]);

@@ -42,7 +42,9 @@ vi.mock('./config.js', () => ({
 
 // Mock group-folder
 vi.mock('./group-folder.js', () => ({
-  resolveGroupFolderPath: vi.fn((f: string) => `/tmp/nanoclaw-test-groups/${f}`),
+  resolveGroupFolderPath: vi.fn(
+    (f: string) => `/tmp/nanoclaw-test-groups/${f}`,
+  ),
   resolveGroupIpcPath: vi.fn((f: string) => `/tmp/nanoclaw-test-data/ipc/${f}`),
 }));
 
@@ -61,13 +63,16 @@ vi.mock('fs', async () => {
     default: {
       ...actual,
       existsSync: vi.fn((p: string) => {
-        if (typeof p === 'string' && p.endsWith('.env')) return !!mockEnvContent;
-        if (typeof p === 'string' && p.includes('readwise')) return !!mockReadwiseToken;
+        if (typeof p === 'string' && p.endsWith('.env'))
+          return !!mockEnvContent;
+        if (typeof p === 'string' && p.includes('readwise'))
+          return !!mockReadwiseToken;
         return false;
       }),
       readFileSync: vi.fn((p: string) => {
         if (typeof p === 'string' && p.endsWith('.env')) return mockEnvContent;
-        if (typeof p === 'string' && p.includes('readwise')) return mockReadwiseToken;
+        if (typeof p === 'string' && p.includes('readwise'))
+          return mockReadwiseToken;
         throw new Error('ENOENT');
       }),
       mkdirSync: vi.fn(),

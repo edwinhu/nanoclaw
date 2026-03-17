@@ -19,10 +19,11 @@ import {
 } from './db.js';
 import { logger } from './logger.js';
 
-const COMPANION_URL =
-  process.env.COMPANION_URL || 'http://localhost:3456';
-const COMPANION_WS_URL =
-  COMPANION_URL.replace('http://', 'ws://').replace('https://', 'wss://');
+const COMPANION_URL = process.env.COMPANION_URL || 'http://localhost:3456';
+const COMPANION_WS_URL = COMPANION_URL.replace('http://', 'ws://').replace(
+  'https://',
+  'wss://',
+);
 const POLL_INTERVAL = 30_000;
 const STUCK_THRESHOLD = 2 * 60 * 60_000; // 2 hours
 const MONITOR_URL = 'https://mac-vwh7mb-pro.tailc143b.ts.net';
@@ -80,9 +81,7 @@ function connectToSession(
   ws.onmessage = async (event) => {
     try {
       const msg = JSON.parse(
-        typeof event.data === 'string'
-          ? event.data
-          : event.data.toString(),
+        typeof event.data === 'string' ? event.data : event.data.toString(),
       ) as {
         type: string;
         data?: {
@@ -125,9 +124,7 @@ function connectToSession(
           total_cost_usd: cost,
           total_lines_added: linesAdded,
           total_lines_removed: linesRemoved,
-          error: isError
-            ? `${msg.data.subtype ?? 'error'}`
-            : null,
+          error: isError ? `${msg.data.subtype ?? 'error'}` : null,
         });
 
         if (isError) {
@@ -229,7 +226,9 @@ function connectToSession(
   }, STUCK_THRESHOLD);
 
   // Store timer reference for cleanup
-  (ws as WebSocket & { _stuckTimer?: ReturnType<typeof setTimeout> })._stuckTimer = stuckTimer;
+  (
+    ws as WebSocket & { _stuckTimer?: ReturnType<typeof setTimeout> }
+  )._stuckTimer = stuckTimer;
 
   logger.debug(
     { sessionId: session.session_id },
@@ -240,7 +239,9 @@ function connectToSession(
 function cleanup(sessionId: string): void {
   const ws = activeConnections.get(sessionId);
   if (ws) {
-    const timer = (ws as WebSocket & { _stuckTimer?: ReturnType<typeof setTimeout> })._stuckTimer;
+    const timer = (
+      ws as WebSocket & { _stuckTimer?: ReturnType<typeof setTimeout> }
+    )._stuckTimer;
     if (timer) clearTimeout(timer);
     try {
       ws.close();
@@ -279,7 +280,11 @@ async function fallbackRestCheck(
       return;
     }
 
-    const state = (await res.json()) as { state: string; exitCode?: number | null; createdAt?: number };
+    const state = (await res.json()) as {
+      state: string;
+      exitCode?: number | null;
+      createdAt?: number;
+    };
 
     if (state.state === 'exited') {
       const isSuccess = state.exitCode === 0 || state.exitCode === null;
@@ -343,9 +348,7 @@ async function maybeSendSummary(deps: {
           : s.status === 'failed'
             ? 'FAILED'
             : 'stuck';
-      const cost = s.total_cost_usd
-        ? ` ($${s.total_cost_usd.toFixed(2)})`
-        : '';
+      const cost = s.total_cost_usd ? ` ($${s.total_cost_usd.toFixed(2)})` : '';
       return `${i + 1}. **${s.task_title}** — ${icon}${cost}`;
     });
 

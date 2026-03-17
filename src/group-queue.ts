@@ -109,9 +109,15 @@ export class GroupQueue {
       // drainGroup) or when the container becomes idle (via notifyIdle).
       if (state.idleWaiting) {
         this.closeStdin(groupJid);
-        logger.info({ groupJid, taskId }, 'Preempting idle container for scheduled task');
+        logger.info(
+          { groupJid, taskId },
+          'Preempting idle container for scheduled task',
+        );
       } else {
-        logger.info({ groupJid, taskId }, 'Task queued, container busy — will run after current work');
+        logger.info(
+          { groupJid, taskId },
+          'Task queued, container busy — will run after current work',
+        );
       }
       return;
     }
@@ -203,10 +209,16 @@ export class GroupQueue {
     const name = state.containerName;
     exec(`docker stop ${name}`, { timeout: 15000 }, (err) => {
       if (err) {
-        logger.warn({ groupJid, containerName: name, err }, 'docker stop failed');
+        logger.warn(
+          { groupJid, containerName: name, err },
+          'docker stop failed',
+        );
       }
     });
-    logger.info({ groupJid, containerName: name }, 'Stopping container for restart');
+    logger.info(
+      { groupJid, containerName: name },
+      'Stopping container for restart',
+    );
     return true;
   }
 

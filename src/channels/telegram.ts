@@ -1,9 +1,6 @@
 import { Bot } from 'grammy';
 
-import {
-  ASSISTANT_NAME,
-  TRIGGER_PATTERN,
-} from '../config.js';
+import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import {
   getAllRegisteredGroups,
   storeChatMetadata,
@@ -96,7 +93,8 @@ export class TelegramChannel implements Channel {
         const isBotMentioned = entities.some(
           (e) =>
             e.type === 'mention' &&
-            content.substring(e.offset, e.offset + e.length).toLowerCase() === `@${botUsername}`,
+            content.substring(e.offset, e.offset + e.length).toLowerCase() ===
+              `@${botUsername}`,
         );
         if (isBotMentioned && !TRIGGER_PATTERN.test(content)) {
           content = `@${ASSISTANT_NAME} ${content}`;
@@ -109,7 +107,10 @@ export class TelegramChannel implements Channel {
       const group = registeredGroups[chatId];
 
       if (!group) {
-        logger.debug({ chatId, chatName }, 'Message from unregistered Telegram chat');
+        logger.debug(
+          { chatId, chatName },
+          'Message from unregistered Telegram chat',
+        );
         return;
       }
 
@@ -123,13 +124,18 @@ export class TelegramChannel implements Channel {
         is_from_me: false,
       });
 
-      logger.info({ chatId, chatName, sender: senderName }, 'Telegram message stored');
+      logger.info(
+        { chatId, chatName, sender: senderName },
+        'Telegram message stored',
+      );
     });
 
     // Handle non-text messages with placeholders
     bot.on('message:photo', (ctx) => this.storeNonTextMessage(ctx, '[Photo]'));
     bot.on('message:video', (ctx) => this.storeNonTextMessage(ctx, '[Video]'));
-    bot.on('message:voice', (ctx) => this.storeNonTextMessage(ctx, '[Voice message]'));
+    bot.on('message:voice', (ctx) =>
+      this.storeNonTextMessage(ctx, '[Voice message]'),
+    );
     bot.on('message:audio', (ctx) => this.storeNonTextMessage(ctx, '[Audio]'));
     bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
@@ -139,8 +145,12 @@ export class TelegramChannel implements Channel {
       const emoji = ctx.message.sticker?.emoji || '';
       this.storeNonTextMessage(ctx, `[Sticker ${emoji}]`);
     });
-    bot.on('message:location', (ctx) => this.storeNonTextMessage(ctx, '[Location]'));
-    bot.on('message:contact', (ctx) => this.storeNonTextMessage(ctx, '[Contact]'));
+    bot.on('message:location', (ctx) =>
+      this.storeNonTextMessage(ctx, '[Location]'),
+    );
+    bot.on('message:contact', (ctx) =>
+      this.storeNonTextMessage(ctx, '[Contact]'),
+    );
 
     bot.catch((err) => {
       logger.error({ err: err.message }, 'Telegram bot error');
@@ -151,9 +161,14 @@ export class TelegramChannel implements Channel {
 
     bot.start({
       onStart: (botInfo) => {
-        logger.info({ username: botInfo.username, id: botInfo.id }, 'Telegram bot connected');
+        logger.info(
+          { username: botInfo.username, id: botInfo.id },
+          'Telegram bot connected',
+        );
         console.log(`\n  Telegram bot: @${botInfo.username}`);
-        console.log(`  Send /chatid to the bot to get a chat's registration ID\n`);
+        console.log(
+          `  Send /chatid to the bot to get a chat's registration ID\n`,
+        );
       },
     });
   }
@@ -171,7 +186,9 @@ export class TelegramChannel implements Channel {
       const sendChunk = async (chunk: string) => {
         try {
           const html = markdownToTelegramHtml(chunk);
-          await this.bot!.api.sendMessage(numericId, html, { parse_mode: 'HTML' });
+          await this.bot!.api.sendMessage(numericId, html, {
+            parse_mode: 'HTML',
+          });
         } catch {
           await this.bot!.api.sendMessage(numericId, chunk);
         }
@@ -184,7 +201,10 @@ export class TelegramChannel implements Channel {
           await sendChunk(text.slice(i, i + MAX_LENGTH));
         }
       }
-      logger.info({ chatId: jid, length: text.length }, 'Telegram message sent');
+      logger.info(
+        { chatId: jid, length: text.length },
+        'Telegram message sent',
+      );
     } catch (err) {
       logger.error({ chatId: jid, err }, 'Failed to send Telegram message');
     }
@@ -226,7 +246,9 @@ export class TelegramChannel implements Channel {
   }
 
   private static senderName(from: any): string {
-    return from?.first_name || from?.username || from?.id?.toString() || 'Unknown';
+    return (
+      from?.first_name || from?.username || from?.id?.toString() || 'Unknown'
+    );
   }
 
   private storeNonTextMessage(ctx: any, placeholder: string): void {

@@ -206,7 +206,12 @@ describe('credential-proxy', () => {
       if (upstreamCallCount <= 2) {
         // First two attempts return 500
         res.writeHead(500, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Internal server error' } }));
+        res.end(
+          JSON.stringify({
+            type: 'error',
+            error: { type: 'api_error', message: 'Internal server error' },
+          }),
+        );
       } else {
         // Third attempt succeeds
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -246,7 +251,12 @@ describe('credential-proxy', () => {
     upstreamServer = http.createServer((_req, res) => {
       upstreamCallCount++;
       res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Internal server error' } }));
+      res.end(
+        JSON.stringify({
+          type: 'error',
+          error: { type: 'api_error', message: 'Internal server error' },
+        }),
+      );
     });
     await new Promise<void>((resolve) =>
       upstreamServer.listen(0, '127.0.0.1', resolve),

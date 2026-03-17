@@ -43,7 +43,9 @@ export function readKeychainOAuthToken(): string | null {
   if (!parsed) return cachedToken;
 
   // The keychain stores credentials under claudeAiOauth (newer) or oauthAccount (older)
-  const oauth = (parsed?.claudeAiOauth ?? parsed?.oauthAccount) as Record<string, unknown> | undefined;
+  const oauth = (parsed?.claudeAiOauth ?? parsed?.oauthAccount) as
+    | Record<string, unknown>
+    | undefined;
   const token = (oauth?.accessToken as string) ?? null;
 
   if (token && typeof token === 'string') {

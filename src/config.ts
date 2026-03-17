@@ -18,7 +18,8 @@ export const SCHEDULER_POLL_INTERVAL = 60000;
 export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 export const TELEGRAM_ONLY = process.env.TELEGRAM_ONLY === 'true';
 export const MATRIX_ACCESS_TOKEN = process.env.MATRIX_ACCESS_TOKEN || '';
-export const MATRIX_HOMESERVER = process.env.MATRIX_HOMESERVER || 'https://matrix.beeper.com';
+export const MATRIX_HOMESERVER =
+  process.env.MATRIX_HOMESERVER || 'https://matrix.beeper.com';
 
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
@@ -56,10 +57,7 @@ export const CREDENTIAL_PROXY_PORT = parseInt(
   10,
 );
 export const IPC_POLL_INTERVAL = 1000;
-export const IDLE_TIMEOUT = parseInt(
-  process.env.IDLE_TIMEOUT || '180000',
-  10,
-); // 3min default — must be < CONTAINER_TIMEOUT so clean shutdown beats hard kill
+export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '180000', 10); // 3min default — must be < CONTAINER_TIMEOUT so clean shutdown beats hard kill
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,

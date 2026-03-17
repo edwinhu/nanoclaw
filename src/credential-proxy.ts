@@ -101,11 +101,14 @@ function saveOAuthCredentials(updated: OAuthCredentials): void {
       const newCred = JSON.stringify(keychainData);
       execSync(
         'security delete-generic-password -s "Claude Code-credentials" 2>/dev/null; ' +
-        `security add-generic-password -s "Claude Code-credentials" -a "Claude Code" -w ${JSON.stringify(newCred)}`,
+          `security add-generic-password -s "Claude Code-credentials" -a "Claude Code" -w ${JSON.stringify(newCred)}`,
         { stdio: ['ignore', 'ignore', 'ignore'] },
       );
     } catch (err) {
-      logger.warn({ err }, 'Failed to persist refreshed OAuth token to keychain');
+      logger.warn(
+        { err },
+        'Failed to persist refreshed OAuth token to keychain',
+      );
     }
   }
 }
@@ -264,7 +267,8 @@ export function startCredentialProxy(
       } else {
         // No credentials file or keychain — fall back to static .env tokens (legacy)
         tokenCache = {
-          value: secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN,
+          value:
+            secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN,
           cacheExpiresAt: now + TOKEN_CACHE_TTL_MS,
         };
       }

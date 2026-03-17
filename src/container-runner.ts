@@ -227,13 +227,20 @@ function buildVolumeMounts(
   // Always overwrite settings.json to prevent drift (e.g., plugins auto-installing
   // and injecting hooks that confuse the container agent with "LOCAL SESSION" context)
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  fs.writeFileSync(settingsFile, JSON.stringify({
-    env: {
-      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-      CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-    },
-  }, null, 2) + '\n');
+  fs.writeFileSync(
+    settingsFile,
+    JSON.stringify(
+      {
+        env: {
+          CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+          CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+          CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+        },
+      },
+      null,
+      2,
+    ) + '\n',
+  );
 
   // Sync skills from multiple locations into each group's .claude/skills/
   const skillsDst = path.join(groupSessionsDir, 'skills');
@@ -259,7 +266,10 @@ function buildVolumeMounts(
       } catch (err: any) {
         if (err.code === 'ENOENT') {
           // Broken symlink or file disappeared - skip it
-          logger.debug({ srcPath, err: err.message }, 'Skipping broken symlink or missing file');
+          logger.debug(
+            { srcPath, err: err.message },
+            'Skipping broken symlink or missing file',
+          );
           continue;
         }
         throw err;
@@ -303,9 +313,20 @@ function buildVolumeMounts(
   }
 
   // 4. Copy skills from CLI tool projects (superhuman, morgen, etc.)
-  const cliSkillProjects = ['superhuman-cli', 'morgen-cli', 'readwise-cli', 'obsidian-cli'];
+  const cliSkillProjects = [
+    'superhuman-cli',
+    'morgen-cli',
+    'readwise-cli',
+    'obsidian-cli',
+  ];
   for (const project of cliSkillProjects) {
-    const projectSkillsDir = path.join(homeDir, 'projects', project, '.claude', 'skills');
+    const projectSkillsDir = path.join(
+      homeDir,
+      'projects',
+      project,
+      '.claude',
+      'skills',
+    );
     if (fs.existsSync(projectSkillsDir)) {
       for (const skillDir of fs.readdirSync(projectSkillsDir)) {
         const srcDir = path.join(projectSkillsDir, skillDir);
@@ -547,6 +568,21 @@ function buildContainerArgs(
     '-e',
     `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
+
+  // Disable experimental API betas (context_management, output_config, etc.)
+  // that are incompatible with Spotless proxy's request rewriting. Without this,
+  // the SDK sends beta body fields that require matching anthropic-beta headers,
+  // and Spotless's modified requests cause intermittent 400 "Error" from the API.
+  // See: https://github.com/anthropics/claude-code/issues/21612
+  args.push('-e', 'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1');
+
+  // Disable adaptive thinking — a separate beta (adaptive-thinking-2026-01-28)
+  // NOT controlled by DISABLE_EXPERIMENTAL_BETAS. Adaptive thinking sends
+  // thinking: { type: "adaptive" } in the request body, which is incompatible
+  // with Spotless's request modifications (system prompt augmentation, message
+  // rewriting, cache_control stripping). Falls back to standard thinking
+  // (type: enabled, budget_tokens: N) which works with Spotless.
+  args.push('-e', 'CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1');
 
   // Mirror the host's auth method with a placeholder value.
   // API key mode: SDK sends x-api-key, proxy replaces with real key.
@@ -994,7 +1030,9 @@ export function writeTasksSnapshot(
   fs.mkdirSync(groupIpcDir, { recursive: true });
 
   // Only include active/paused tasks — completed/cancelled are noise
-  const activeTasks = tasks.filter((t) => t.status === 'active' || t.status === 'paused');
+  const activeTasks = tasks.filter(
+    (t) => t.status === 'active' || t.status === 'paused',
+  );
 
   // Main sees all active tasks, others only see their own
   const filteredTasks = isMain

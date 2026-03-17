@@ -57,7 +57,9 @@ SPOTLESS_AGENT="clawd"
 # refresh logic applies to all API calls. ANTHROPIC_BASE_URL points to
 # the host credential proxy (set by container-runner.ts).
 export SPOTLESS_UPSTREAM_URL="${ANTHROPIC_BASE_URL:-https://api.anthropic.com}"
-if command -v spotless >/dev/null 2>&1; then
+if [ "${DISABLE_SPOTLESS:-}" = "1" ]; then
+  echo "[entrypoint] Spotless DISABLED via DISABLE_SPOTLESS=1" >&2
+elif command -v spotless >/dev/null 2>&1; then
   # Ensure spotless data dir exists (mounted from host for persistence)
   mkdir -p "$HOME/.spotless"
   # Remove stale PID file from previous container (mounted volume persists across runs)

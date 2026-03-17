@@ -186,5 +186,15 @@ The 401 retry fires for OAuth token exchange requests (`/api/oauth/claude_cli/cr
 ### Regression tests
 - `npx vitest run src/credential-proxy.test.ts` — includes 2 new 5xx retry tests
 ---
-Last updated: 2026-03-16 20:27
+Last updated: 2026-03-16 20:31
+---
+
+[Compaction at 20:36] (workflow: /dev) - Context was summarized
+---
+Last updated: 2026-03-17 00:33
+---
+
+[Compaction at 00:47] (workflow: /dev) - Context was summarized
+---
+Last updated: 2026-03-17 00:56
 ---
