@@ -161,5 +161,30 @@ Last updated: 2026-03-16 17:20
 
 [Compaction at 17:26] (workflow: /dev) - Context was summarized
 ---
-Last updated: 2026-03-16 17:29
+Last updated: 2026-03-16 17:45
+---
+
+## Task: Fix 5xx retry logic not firing in credential proxy [COMPLETE]
+
+### Root cause
+Spotless (persistent memory proxy) hardcodes `const ANTHROPIC_API_URL = "https://api.anthropic.com"` in its proxy.ts. When Spotless runs inside the container, it overrides `ANTHROPIC_BASE_URL` to point to itself (`localhost:9050`), then forwards all `/v1/messages` requests directly to `api.anthropic.com`, completely bypassing the credential proxy on the host. The credential proxy's 5xx retry logic was correct but never executed because it never saw the API traffic.
+
+### Why 401 retry DID work
+The 401 retry fires for OAuth token exchange requests (`/api/oauth/claude_cli/create_api_key`), which are NOT intercepted by Spotless's `/v1/messages` handler. These go through Spotless's `forwardSimple()` path, but the credential proxy still handles them because they carry `Authorization` headers. The key insight: only `/v1/messages` calls (the ones that get 500s) were bypassing the credential proxy.
+
+### Fix
+1. `container/patches/spotless-configurable-upstream.js` — patches Spotless to read `SPOTLESS_UPSTREAM_URL` env var
+2. `container/scripts/entrypoint.sh` — sets `SPOTLESS_UPSTREAM_URL=$ANTHROPIC_BASE_URL` before Spotless starts
+3. `container/Dockerfile` — applies the patch at build time
+4. New request chain: `SDK -> Spotless -> Credential Proxy -> Anthropic API`
+
+### Key discovery
+- Spotless hardcodes its upstream URL and has no configuration option for it
+- The entrypoint.sh override of `ANTHROPIC_BASE_URL` happens AFTER `SPOTLESS_UPSTREAM_URL` is captured, so the ordering is: capture original -> start Spotless -> override
+- Requires container rebuild: `docker builder prune && ./container/build.sh`
+
+### Regression tests
+- `npx vitest run src/credential-proxy.test.ts` — includes 2 new 5xx retry tests
+---
+Last updated: 2026-03-16 20:27
 ---

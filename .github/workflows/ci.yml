@@ -13,7 +13,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
+      - run: npm ci --include=dev
 
       - name: Format check
         run: npm run format:check

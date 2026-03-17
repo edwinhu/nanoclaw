@@ -66,7 +66,7 @@ jobs:
             fi
 
             # Install deps and validate
-            npm ci
+            npm ci --include=dev
 
             if ! npm run build; then
               echo "::warning::Build failed for $BRANCH"

@@ -124,6 +124,23 @@ RUN node /tmp/spotless-no-history.js \
       "$(dirname $(readlink -f $(which spotless)))/history.ts" \
     && rm /tmp/spotless-no-history.js
 
+# Patch spotless: make upstream URL configurable via SPOTLESS_UPSTREAM_URL.
+# By default Spotless hardcodes api.anthropic.com, bypassing the credential
+# proxy's 5xx retry and token refresh logic. This patch lets the entrypoint
+# route Spotless through the credential proxy.
+COPY patches/spotless-configurable-upstream.js /tmp/spotless-configurable-upstream.js
+RUN node /tmp/spotless-configurable-upstream.js \
+      "$(dirname $(readlink -f $(which spotless)))/proxy.ts" \
+    && rm /tmp/spotless-configurable-upstream.js
+
+# Patch spotless: filter self-referential identity fluff from digest/reflection.
+# Prevents wasteful memories like "I trace bugs systematically" that consume
+# retrieval slots without providing actionable recall.
+COPY patches/spotless-digest-filter.js /tmp/spotless-digest-filter.js
+RUN node /tmp/spotless-digest-filter.js \
+      "$(dirname $(readlink -f $(which spotless)))/digest-prompt.ts" \
+    && rm /tmp/spotless-digest-filter.js
+
 # Copy CDP helper script
 COPY scripts/cdp-browser /usr/local/bin/cdp-browser
 RUN chmod +x /usr/local/bin/cdp-browser

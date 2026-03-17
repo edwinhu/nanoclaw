@@ -53,6 +53,10 @@ unset _OAUTH _APIKEY
 # Start spotless persistent memory proxy if installed
 SPOTLESS_PORT=9050
 SPOTLESS_AGENT="clawd"
+# Route Spotless through the credential proxy so its 5xx retry and token
+# refresh logic applies to all API calls. ANTHROPIC_BASE_URL points to
+# the host credential proxy (set by container-runner.ts).
+export SPOTLESS_UPSTREAM_URL="${ANTHROPIC_BASE_URL:-https://api.anthropic.com}"
 if command -v spotless >/dev/null 2>&1; then
   # Ensure spotless data dir exists (mounted from host for persistence)
   mkdir -p "$HOME/.spotless"

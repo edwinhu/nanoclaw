@@ -62,6 +62,102 @@ interface VolumeMount {
   optional?: boolean; // Skip if Docker can't mount (e.g., macOS TCC-protected dirs)
 }
 
+/**
+ * JSONL session file size threshold (in bytes) for triggering truncation.
+ * When the file exceeds this size after a container run, we truncate it
+ * to only keep entries from the last compact_boundary onward.
+ * The SDK's JSONL is append-only — compaction adds a compact_boundary marker
+ * but never removes old entries. Without truncation, files grow indefinitely.
+ */
+const JSONL_TRUNCATE_THRESHOLD = 2 * 1024 * 1024; // 2MB
+
+/**
+ * Truncate a session JSONL file by keeping only entries from the last
+ * compact_boundary onward. This is safe because the SDK always slices
+ * to the last compact_boundary when loading a session.
+ *
+ * The JSONL is append-only: each compaction adds a compact_boundary marker
+ * followed by a summary message, but never removes old entries. Over time
+ * (especially with long-lived sessions), the file grows without bound.
+ */
+/** @internal — exported for testing only */
+export function truncateSessionJsonl(
+  groupFolder: string,
+  sessionId: string | undefined,
+): void {
+  if (!sessionId) return;
+
+  const projectDir = path.join(
+    DATA_DIR,
+    'sessions',
+    groupFolder,
+    '.claude',
+    'projects',
+    '-workspace-group',
+  );
+  const jsonlPath = path.join(projectDir, `${sessionId}.jsonl`);
+
+  try {
+    if (!fs.existsSync(jsonlPath)) return;
+
+    const stat = fs.statSync(jsonlPath);
+    if (stat.size < JSONL_TRUNCATE_THRESHOLD) return;
+
+    const content = fs.readFileSync(jsonlPath, 'utf-8');
+    const lines = content.split('\n');
+
+    // Find the last compact_boundary line
+    let lastCompactIdx = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      if (line.includes('"compact_boundary"')) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
+            lastCompactIdx = i;
+            break;
+          }
+        } catch {
+          // Not valid JSON, skip
+        }
+      }
+    }
+
+    if (lastCompactIdx <= 0) return; // No compaction found or already at start
+
+    const truncated = lines.slice(lastCompactIdx).join('\n');
+    const originalSize = stat.size;
+    const newSize = Buffer.byteLength(truncated, 'utf-8');
+
+    // Only truncate if we'd save significant space
+    if (newSize >= originalSize * 0.8) return;
+
+    fs.writeFileSync(jsonlPath, truncated);
+    logger.info(
+      {
+        groupFolder,
+        sessionId,
+        originalSize,
+        newSize,
+        linesRemoved: lastCompactIdx,
+        linesKept: lines.length - lastCompactIdx,
+      },
+      'Truncated session JSONL to last compact boundary',
+    );
+  } catch (err) {
+    // Non-fatal: worst case is the file stays large
+    logger.warn(
+      {
+        groupFolder,
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to truncate session JSONL',
+    );
+  }
+}
+
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
@@ -794,6 +890,11 @@ export async function runContainerAgent(
         });
         return;
       }
+
+      // Truncate bloated session JSONL files after successful container runs.
+      // The SDK's JSONL is append-only, so without this, files grow indefinitely.
+      const effectiveSessionId = newSessionId || input.sessionId;
+      truncateSessionJsonl(group.folder, effectiveSessionId);
 
       // Streaming mode: wait for output chain to settle, return completion marker
       if (onOutput) {

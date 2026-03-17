@@ -193,6 +193,86 @@ describe('credential-proxy', () => {
     expect(lastUpstreamHeaders['transfer-encoding']).toBeUndefined();
   });
 
+  it('retries on upstream 500 and returns success after recovery', async () => {
+    // Regression test: 5xx retry logic must fire when the upstream returns 500.
+    // Previously, Spotless intercepted ANTHROPIC_BASE_URL and forwarded to
+    // api.anthropic.com directly, so the credential proxy never saw 500s.
+    // After the fix (Spotless chains through the credential proxy), this retry
+    // logic is reachable and must work.
+    let upstreamCallCount = 0;
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((req, res) => {
+      upstreamCallCount++;
+      if (upstreamCallCount <= 2) {
+        // First two attempts return 500
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Internal server error' } }));
+      } else {
+        // Third attempt succeeds
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    upstreamPort = (upstreamServer.address() as AddressInfo).port;
+
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const result = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': 'placeholder',
+        },
+      },
+      '{}',
+    );
+
+    // Proxy should have retried twice (3 total attempts) and returned the 200
+    expect(upstreamCallCount).toBe(3);
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toEqual({ ok: true });
+  }, 15_000); // Allow time for exponential backoff (1s + 2s delays)
+
+  it('returns 500 after exhausting all retries', async () => {
+    // When all retry attempts fail, the proxy should return the last 500 response
+    let upstreamCallCount = 0;
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((_req, res) => {
+      upstreamCallCount++;
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Internal server error' } }));
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    upstreamPort = (upstreamServer.address() as AddressInfo).port;
+
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const result = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': 'placeholder',
+        },
+      },
+      '{}',
+    );
+
+    // MAX_5XX_RETRIES is 3, starting at attempt=1, so 3 total attempts
+    expect(upstreamCallCount).toBe(3);
+    expect(result.statusCode).toBe(500);
+  }, 15_000); // Allow time for exponential backoff
+
   it('returns 502 when upstream is unreachable', async () => {
     Object.assign(mockEnv, {
       ANTHROPIC_API_KEY: 'sk-ant-real-key',
@@ -366,24 +446,17 @@ describe('credential-proxy', () => {
 });
 
 /**
- * Architectural gap: Spotless bypasses credential proxy.
+ * Spotless chaining through credential proxy.
  *
- * Spotless (persistent memory agent) hardcodes api.anthropic.com as its API
- * endpoint. When Spotless runs inside the container, it sends requests directly
- * to Anthropic's API instead of routing through the credential proxy on the
- * host. This means:
+ * Spotless is patched (spotless-configurable-upstream.js) to read
+ * SPOTLESS_UPSTREAM_URL, which the entrypoint sets to the credential proxy.
+ * This means Spotless -> credential proxy -> Anthropic API, so the proxy's
+ * 5xx retry and token refresh logic applies to all API calls.
  *
- *   1. The proxy's token refresh logic is never invoked for Spotless requests.
- *   2. Spotless must receive a valid token at container startup (via readSecrets).
- *   3. If the token expires mid-session, Spotless will get 401s with no recovery.
- *
- * The mitigation (Bug 1 fix) ensures readSecrets() provides the freshest token
- * from the keychain. But there is no runtime refresh for Spotless — it is a
- * known architectural limitation.
- *
- * These tests document the expected behavior that mitigates the gap.
+ * The tests below document the proxy behavior for requests that chain through
+ * it (whether from Spotless or directly from the SDK).
  */
-describe('spotless credential proxy bypass (architectural gap)', () => {
+describe('spotless credential proxy chaining', () => {
   afterEach(() => {
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
     mockKeychainToken = null;

@@ -15,10 +15,10 @@ This skill adds [Spotless](https://github.com/LabLeaks/spotless) to NanoClaw. Sp
 
 **Architecture:**
 ```
-Claude Agent SDK → ANTHROPIC_BASE_URL → Spotless proxy (localhost:9050)
+Claude Agent SDK → Spotless (localhost:9050) → Credential Proxy (host:3001) → Anthropic API
     → augments system prompt with <spotless-orientation>
     → injects identity + selector-picked memories into user messages
-    → forwards to Anthropic API
+    → forwards through credential proxy (5xx retry + token refresh)
     → archives request/response to SQLite for future digests
 ```
 
@@ -67,11 +67,30 @@ COPY patches/spotless-no-history.js /tmp/spotless-no-history.js
 RUN node /tmp/spotless-no-history.js \
       "$(dirname $(readlink -f $(which spotless)))/history.ts" \
     && rm /tmp/spotless-no-history.js
+
+# Patch spotless: make upstream URL configurable via SPOTLESS_UPSTREAM_URL.
+# By default Spotless hardcodes api.anthropic.com, bypassing the credential
+# proxy's 5xx retry and token refresh logic. This patch lets the entrypoint
+# route Spotless through the credential proxy.
+COPY patches/spotless-configurable-upstream.js /tmp/spotless-configurable-upstream.js
+RUN node /tmp/spotless-configurable-upstream.js \
+      "$(dirname $(readlink -f $(which spotless)))/proxy.ts" \
+    && rm /tmp/spotless-configurable-upstream.js
+
+# Patch spotless: filter self-referential identity fluff from digest/reflection.
+# Prevents wasteful memories like "I trace bugs systematically" that consume
+# retrieval slots without providing actionable recall.
+COPY patches/spotless-digest-filter.js /tmp/spotless-digest-filter.js
+RUN node /tmp/spotless-digest-filter.js \
+      "$(dirname $(readlink -f $(which spotless)))/digest-prompt.ts" \
+    && rm /tmp/spotless-digest-filter.js
 ```
 
 **Important:**
 - `BUN_INSTALL=/usr/local` is required. Without it, bun installs to `/home/node/.bun/bin` which isn't in the container's PATH.
-- The patch script (`container/patches/spotless-no-history.js`) replaces `buildHistory()` with a stub that returns empty messages but preserves consolidation pressure calculation. This is critical — without it, Spotless replays the entire `raw_events` table as synthetic conversation turns, duplicating NanoClaw's in-session context and consuming ~60% of the context budget.
+- `spotless-no-history.js` replaces `buildHistory()` with a stub that returns empty messages but preserves consolidation pressure calculation. Without it, Spotless replays the entire `raw_events` table as synthetic conversation turns, consuming ~60% of the context budget.
+- `spotless-configurable-upstream.js` makes the upstream URL configurable via `SPOTLESS_UPSTREAM_URL` env var. Without it, Spotless hardcodes `api.anthropic.com`, bypassing the credential proxy's 5xx retry and token refresh.
+- `spotless-digest-filter.js` adds guidance to the digest and reflection prompts to skip self-referential identity fluff ("I trace bugs systematically", "I am autonomous", etc.) that wastes retrieval slots.
 
 ## 2. Update Entrypoint
 
@@ -108,6 +127,11 @@ Add after the auth token block, before the final `node` command:
 # Start spotless persistent memory proxy if installed
 SPOTLESS_PORT=9050
 SPOTLESS_AGENT="AGENT_NAME_HERE"
+# Route Spotless through the credential proxy so its 5xx retry and token
+# refresh logic applies to all API calls. ANTHROPIC_BASE_URL points to
+# the host credential proxy (set by container-runner.ts). Capture it BEFORE
+# overwriting ANTHROPIC_BASE_URL with the Spotless proxy URL.
+export SPOTLESS_UPSTREAM_URL="${ANTHROPIC_BASE_URL:-https://api.anthropic.com}"
 if command -v spotless >/dev/null 2>&1; then
   # Ensure spotless data dir exists (mounted from host for persistence)
   mkdir -p "$HOME/.spotless"
@@ -129,6 +153,7 @@ fi
 Replace `AGENT_NAME_HERE` with the user's chosen agent name (e.g., `clawd`).
 
 **Key details:**
+- `SPOTLESS_UPSTREAM_URL` must be set BEFORE `ANTHROPIC_BASE_URL` is overwritten. This captures the credential proxy URL (e.g., `http://host.docker.internal:3001`) so Spotless chains through it: `Claude SDK → Spotless (localhost:9050) → Credential Proxy (host:3001) → Anthropic API`. Without this, Spotless bypasses the credential proxy and hits api.anthropic.com directly, losing 5xx retry and token refresh.
 - `rm -f "$HOME/.spotless/spotless.pid"` — the PID file persists on the mounted volume across container runs. Without this, spotless refuses to start ("Already running").
 - `nohup` — prevents spotless from dying when the shell hands off to `node`.
 - `ANTHROPIC_BASE_URL` — the Claude Agent SDK reads this to route API calls through the proxy.

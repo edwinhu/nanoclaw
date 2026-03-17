@@ -121,8 +121,11 @@ describe('NanoClaw E2E Pipeline', () => {
 
     // Verify logs show the full lifecycle
     const fullLogs = getLogTail(logOffset);
-    expect(fullLogs).toContain('Processing messages');
-    expect(fullLogs).toContain('Spawning container agent');
+    expect(fullLogs).toContain('New messages');
+    // Agent may spawn a new container ("Processing messages") or pipe to an existing one
+    const agentProcessed =
+      fullLogs.includes('Processing messages') || fullLogs.includes('Agent output');
+    expect(agentProcessed).toBe(true);
     expect(fullLogs).toContain('Telegram message sent');
   }, 180_000);
 });

@@ -344,40 +344,63 @@ export function startCredentialProxy(
           return up;
         };
 
-        forwardRequest(headers, async (upRes) => {
-          // On 401, refresh the token and retry once (OAuth mode only).
-          if (
-            upRes.statusCode === 401 &&
-            authMode === 'oauth' &&
-            headers['authorization']
-          ) {
-            // Drain the 401 body so the socket is reusable.
-            upRes.resume();
-            logger.warn(
-              { url: req.url },
-              'Upstream 401 — refreshing OAuth token and retrying',
-            );
-            // Force-invalidate the cache and re-read from keychain/disk.
-            tokenCache = { cacheExpiresAt: 0 };
-            // Force refresh — a 401 means the token is bad regardless of expiresAt
-            const creds = readFullOAuthCredentials();
-            if (creds?.refreshToken) {
-              await doRefresh(creds.refreshToken, Date.now());
+        const MAX_5XX_RETRIES = 3;
+        const BASE_RETRY_MS = 1000;
+
+        const attemptRequest = (
+          hdrs: Record<string, string | number | string[] | undefined>,
+          attempt: number,
+        ): void => {
+          forwardRequest(hdrs, async (upRes) => {
+            // On 401, refresh the token and retry once (OAuth mode only).
+            if (
+              upRes.statusCode === 401 &&
+              authMode === 'oauth' &&
+              hdrs['authorization']
+            ) {
+              // Drain the 401 body so the socket is reusable.
+              upRes.resume();
+              logger.warn(
+                { url: req.url },
+                'Upstream 401 — refreshing OAuth token and retrying',
+              );
+              // Force-invalidate the cache and re-read from keychain/disk.
+              tokenCache = { cacheExpiresAt: 0 };
+              // Force refresh — a 401 means the token is bad regardless of expiresAt
+              const creds = readFullOAuthCredentials();
+              if (creds?.refreshToken) {
+                await doRefresh(creds.refreshToken, Date.now());
+              }
+              const newToken = tokenCache.value ?? (await getOauthToken());
+              const retryHeaders = { ...hdrs };
+              if (newToken) {
+                retryHeaders['authorization'] = `Bearer ${newToken}`;
+              }
+              forwardRequest(retryHeaders, (retryRes) => {
+                res.writeHead(retryRes.statusCode!, retryRes.headers);
+                retryRes.pipe(res);
+              });
+            } else if (
+              upRes.statusCode &&
+              upRes.statusCode >= 500 &&
+              attempt < MAX_5XX_RETRIES
+            ) {
+              // Drain the error body so the socket is reusable.
+              upRes.resume();
+              const delayMs = BASE_RETRY_MS * Math.pow(2, attempt - 1);
+              logger.warn(
+                { url: req.url, status: upRes.statusCode, attempt, delayMs },
+                `Upstream ${upRes.statusCode} — retrying (${attempt}/${MAX_5XX_RETRIES})`,
+              );
+              setTimeout(() => attemptRequest(hdrs, attempt + 1), delayMs);
+            } else {
+              res.writeHead(upRes.statusCode!, upRes.headers);
+              upRes.pipe(res);
             }
-            const newToken = tokenCache.value ?? (await getOauthToken());
-            const retryHeaders = { ...headers };
-            if (newToken) {
-              retryHeaders['authorization'] = `Bearer ${newToken}`;
-            }
-            forwardRequest(retryHeaders, (retryRes) => {
-              res.writeHead(retryRes.statusCode!, retryRes.headers);
-              retryRes.pipe(res);
-            });
-          } else {
-            res.writeHead(upRes.statusCode!, upRes.headers);
-            upRes.pipe(res);
-          }
-        });
+          });
+        };
+
+        attemptRequest(headers, 1);
       });
     });
 

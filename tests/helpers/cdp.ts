@@ -5,7 +5,23 @@
  * (or any Electron app) via WebSocket and exposes helpers for
  * evaluating JS, detecting typing indicators, etc.
  */
+
 import WebSocket from 'ws';
+
+/**
+ * Check if the CDP port is reachable (Beeper Desktop must be running).
+ * Returns true if a connection to the CDP endpoint succeeds.
+ */
+export async function isCdpReachable(): Promise<boolean> {
+  try {
+    const res = await fetch(`http://localhost:${CDP_PORT}/json`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 const CDP_PORT = 9334;
 
@@ -17,7 +33,7 @@ export const TYPING_SELECTORS = {
 };
 
 export interface CDPClient {
-  ws: WebSocket;
+  ws: InstanceType<typeof import('ws').default>;
   send: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
   close: () => void;
 }

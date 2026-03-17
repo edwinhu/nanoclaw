@@ -12,7 +12,7 @@
  * Run:  npx vitest run tests/typing-cdp.test.ts
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { CDPClient, connectCDP, evaluate, hasTypingIndicator, getTypingDetails, TYPING_SELECTORS } from './helpers/cdp.js';
+import { CDPClient, connectCDP, evaluate, hasTypingIndicator, getTypingDetails, TYPING_SELECTORS, isCdpReachable } from './helpers/cdp.js';
 
 const CHAT_NAME = 'Clawd';
 // Use a prompt that forces real work so typing persists long enough to detect
@@ -61,7 +61,9 @@ async function sendBeeperMessage(
   });
 }
 
-describe('Typing indicator CDP detection', () => {
+const cdpReachable = await isCdpReachable();
+
+describe.skipIf(!cdpReachable)('Typing indicator CDP detection', () => {
   let cdp: CDPClient;
 
   beforeAll(async () => {

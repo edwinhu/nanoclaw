@@ -14,10 +14,21 @@
  * Run:  npx vitest run tests/typing-e2e.test.ts
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { chromium, type Browser, type Page } from 'playwright';
 import { readFileSync } from 'fs';
+import { chromium } from 'playwright';
 
 const CDP_URL = 'http://localhost:9334';
+
+// Check if CDP endpoint is reachable (Beeper Desktop must be running)
+let cdpReachable = false;
+try {
+  const res = await fetch(`${CDP_URL}/json`, { signal: AbortSignal.timeout(2000) });
+  cdpReachable = res.ok;
+} catch {
+  // CDP port not reachable — Beeper Desktop not running
+}
+
+import type { Browser, Page } from 'playwright';
 const CHAT_NAME = 'Clawd';
 const LOG_FILE = `${process.env.HOME}/projects/nanoclaw/logs/nanoclaw.log`;
 const TRIGGER_MSG =
@@ -59,7 +70,7 @@ function tsToMs(ts: string): number {
   return (+h * 3600 + +m * 60 + +s) * 1000 + +ms;
 }
 
-describe('Persistent Typing Indicator E2E', () => {
+describe.skipIf(!cdpReachable)('Persistent Typing Indicator E2E', () => {
   let browser: Browser;
   let page: Page;
 

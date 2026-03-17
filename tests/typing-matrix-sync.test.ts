@@ -489,7 +489,9 @@ function printDiagnostic(events: TimelineEvent[], startTs: number): void {
 // Test
 // ---------------------------------------------------------------------------
 
-describe('Typing indicator Matrix sync diagnostic', () => {
+const hasRequiredEnv = !!(process.env.TELEGRAM_BOT_TOKEN && process.env.MATRIX_ACCESS_TOKEN);
+
+describe.skipIf(!hasRequiredEnv)('Typing indicator Matrix sync diagnostic', () => {
   it(
     'runs 60s diagnostic across Telegram, Matrix, and CDP layers',
     async () => {
