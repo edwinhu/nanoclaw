@@ -170,7 +170,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         { group: group.name },
         'Idle timeout, closing container stdin',
       );
-      typingManager.stop(chatJid);
       queue.closeStdin(chatJid);
     }, IDLE_TIMEOUT);
   };
@@ -181,8 +180,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   try {
     await runAgent(group, prompt, chatJid, async (result) => {
-      typingManager.stop(chatJid);
-
       if (result.result) {
         const raw =
           typeof result.result === 'string'
@@ -199,6 +196,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           outputSent = true;
         }
         resetIdleTimer();
+      }
+
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {

@@ -33,7 +33,7 @@ Maintain local patches in `container/patches/spotless-*.js`, applied at Docker b
 
 - Must verify patches still apply after any `npm update` / Spotless version bump
 - Container rebuild required after patch changes
-- `spotless-debug-400.js` is temporary and should be removed once 400 errors are confirmed resolved
+- `spotless-debug-400.js` was removed 2026-03-17 (400 errors confirmed resolved)
 - Consider adding a CI check that verifies patches apply cleanly to the installed Spotless version
 
 ## Alternatives Considered
