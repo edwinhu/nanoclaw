@@ -115,14 +115,10 @@ RUN rm -f /usr/local/bin/playwright && npm install -g agent-browser playwright @
 # Install spotless (persistent memory proxy for Claude Code)
 RUN BUN_INSTALL=/usr/local bun add -g @lableaks/spotless
 
-# Patch spotless: disable raw history replay.
-# NanoClaw's MessageStream handles in-session context; Spotless digested
-# memories + identity handle cross-session recall. Raw history replay
-# duplicates both and wastes ~60% of context budget.
-COPY patches/spotless-no-history.js /tmp/spotless-no-history.js
-RUN node /tmp/spotless-no-history.js \
-      "$(dirname $(readlink -f $(which spotless)))/history.ts" \
-    && rm /tmp/spotless-no-history.js
+# NOTE: Spotless raw history replay is now ENABLED (patch removed).
+# SDK session resume preserves structure but not substance (~92% of assistant
+# messages have empty content). Spotless history replay is the only way the
+# agent retains conversational context across container restarts.
 
 # Patch spotless: make upstream URL configurable via SPOTLESS_UPSTREAM_URL.
 # By default Spotless hardcodes api.anthropic.com, bypassing the credential
@@ -157,6 +153,14 @@ COPY patches/spotless-billing-header-order.js /tmp/spotless-billing-header-order
 RUN node /tmp/spotless-billing-header-order.js \
       "$(dirname $(readlink -f $(which spotless)))/proxy.ts" \
     && rm /tmp/spotless-billing-header-order.js
+
+# Patch spotless: fix isSystemReminder() incorrectly filtering tool_result blocks.
+# The SDK injects <system-reminder> content into tool_result blocks, and the filter
+# removes them, breaking tool_use/tool_result pairing and causing API 400 errors.
+COPY patches/spotless-fix-tool-result-filter.js /tmp/spotless-fix-tool-result-filter.js
+RUN node /tmp/spotless-fix-tool-result-filter.js \
+      "$(dirname $(readlink -f $(which spotless)))/history.ts" \
+    && rm /tmp/spotless-fix-tool-result-filter.js
 
 # Copy CDP helper script
 COPY scripts/cdp-browser /usr/local/bin/cdp-browser
