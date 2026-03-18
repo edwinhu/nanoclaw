@@ -50,12 +50,23 @@ import { startIpcWatcher } from './ipc.js';
 import { logger } from './logger.js';
 import { initMatrixTyping, setMatrixTyping } from './matrix-typing.js';
 import {
+  restoreRemoteControl,
+  startRemoteControl,
+  stopRemoteControl,
+} from './remote-control.js';
+import {
   findChannel,
   formatMessages,
   formatOutbound,
   routeOutbound,
   stripInternalTags,
 } from './router.js';
+import {
+  isSenderAllowed,
+  isTriggerAllowed,
+  loadSenderAllowlist,
+  shouldDropMessage,
+} from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { TypingManager } from './typing.js';
@@ -506,6 +517,7 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+  restoreRemoteControl();
 
   // Start credential proxy (containers route API calls through this)
   const proxyServer = await startCredentialProxy(
@@ -536,6 +548,48 @@ async function main(): Promise<void> {
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Handle /remote-control and /remote-control-end commands
+  async function handleRemoteControl(
+    command: string,
+    chatJid: string,
+    msg: NewMessage,
+  ): Promise<void> {
+    const group = registeredGroups[chatJid];
+    if (!group?.isMain) {
+      logger.warn(
+        { chatJid, sender: msg.sender },
+        'Remote control rejected: not main group',
+      );
+      return;
+    }
+
+    const channel = findChannel(channels, chatJid);
+    if (!channel) return;
+
+    if (command === '/remote-control') {
+      const result = await startRemoteControl(
+        msg.sender,
+        chatJid,
+        process.cwd(),
+      );
+      if (result.ok) {
+        await channel.sendMessage(chatJid, result.url);
+      } else {
+        await channel.sendMessage(
+          chatJid,
+          `Remote Control failed: ${result.error}`,
+        );
+      }
+    } else {
+      const result = stopRemoteControl();
+      if (result.ok) {
+        await channel.sendMessage(chatJid, 'Remote Control session ended.');
+      } else {
+        await channel.sendMessage(chatJid, result.error);
+      }
+    }
+  }
 
   // Build channels based on configuration
   let telegramBotId: string | undefined;
