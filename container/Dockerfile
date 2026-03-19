@@ -162,6 +162,22 @@ RUN node /tmp/spotless-fix-tool-result-filter.js \
       "$(dirname $(readlink -f $(which spotless)))/history.ts" \
     && rm /tmp/spotless-fix-tool-result-filter.js
 
+# Patch spotless: fix trimTobudget() destroying the preamble and leaving
+# orphaned tool_use messages at the trim boundary. The preamble (user + assistant)
+# must survive trimming so the API sees user-first messages.
+COPY patches/spotless-fix-trim-preamble.js /tmp/spotless-fix-trim-preamble.js
+RUN node /tmp/spotless-fix-trim-preamble.js \
+      "$(dirname $(readlink -f $(which spotless)))/history.ts" \
+    && rm /tmp/spotless-fix-trim-preamble.js
+
+# Patch spotless: make DEFAULT_CONTEXT_BUDGET configurable via SPOTLESS_CONTEXT_BUDGET.
+# Upstream hardcodes 500K tokens, which sends ~430K of history per request and
+# easily exceeds Claude Max per-minute rate limits with back-to-back containers.
+COPY patches/spotless-configurable-context-budget.js /tmp/spotless-configurable-context-budget.js
+RUN node /tmp/spotless-configurable-context-budget.js \
+      "$(dirname $(readlink -f $(which spotless)))/tokens.ts" \
+    && rm /tmp/spotless-configurable-context-budget.js
+
 # Copy CDP helper script
 COPY scripts/cdp-browser /usr/local/bin/cdp-browser
 RUN chmod +x /usr/local/bin/cdp-browser

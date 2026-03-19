@@ -255,3 +255,87 @@ describe('container-runner timeout behavior', () => {
     expect(result.newSessionId).toBe('session-456');
   });
 });
+
+describe('container-runner outputChain rejection handling', () => {
+  // Regression test for: outputChain rejection causes runContainerAgent to hang forever.
+  //
+  // Root cause: outputChain is built with unchained .then() calls and no .catch().
+  // If onOutput() throws (e.g. Telegram sendMessage fails), outputChain becomes
+  // permanently rejected. When the container close event fires, it registers
+  // outputChain.then(() => resolve(...)) — but a rejected chain never invokes
+  // the fulfillment callback, so resolve() is never called and the promise
+  // hangs forever. This freezes processGroupMessages → runForGroup's finally
+  // block never runs → state.active stays true → all future messages for the
+  // group are silently queued but never dispatched.
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves as error when onOutput throws — does NOT hang forever', async () => {
+    // onOutput throws synchronously (simulates Telegram sendMessage fallback
+    // throwing when both HTML and plain-text sends fail)
+    const onOutput = vi.fn().mockRejectedValue(new Error('Telegram API error'));
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Emit output marker — this causes onOutput to be called, which throws,
+    // making outputChain permanently rejected
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Agent response',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Container exits normally (code 0)
+    fakeProc.emit('close', 0);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The promise MUST resolve — not hang. Without the fix, this await would
+    // never complete and the test would time out.
+    const result = await resultPromise;
+
+    // Should resolve as error because outputChain rejected
+    expect(result.status).toBe('error');
+  });
+
+  it('resolves as success when onOutput succeeds normally', async () => {
+    // Control: ensure the fix did not break the happy path
+    const onOutput = vi.fn(async () => {});
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Agent response',
+      newSessionId: 'abc-123',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(result.newSessionId).toBe('abc-123');
+  });
+});

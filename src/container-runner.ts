@@ -733,7 +733,10 @@ export async function runContainerAgent(
             resetTimeout();
             // Call onOutput for all markers (including null results)
             // so idle timers start even for "silent" query completions.
+            // The .catch() suppresses "unhandled rejection" warnings — the
+            // rejection is handled in the close event's outputChain.catch().
             outputChain = outputChain.then(() => onOutput(parsed));
+            outputChain.catch(() => {});
           } catch (err) {
             logger.warn(
               { group: group.name, error: err },
@@ -932,19 +935,37 @@ export async function runContainerAgent(
       const effectiveSessionId = newSessionId || input.sessionId;
       truncateSessionJsonl(group.folder, effectiveSessionId);
 
-      // Streaming mode: wait for output chain to settle, return completion marker
+      // Streaming mode: wait for output chain to settle, return completion marker.
+      // IMPORTANT: must use .then(...).catch(...) — not just .then() — so that
+      // if any onOutput() call rejects, outputChain rejection still resolves
+      // the outer promise rather than hanging forever. A hanging promise means
+      // processGroupMessages / runForGroup never return, their finally blocks
+      // never run, state.active stays true, and all future messages for the
+      // group are silently queued but never dispatched.
       if (onOutput) {
-        outputChain.then(() => {
-          logger.info(
-            { group: group.name, duration, newSessionId },
-            'Container completed (streaming mode)',
-          );
-          resolve({
-            status: 'success',
-            result: null,
-            newSessionId,
+        outputChain
+          .then(() => {
+            logger.info(
+              { group: group.name, duration, newSessionId },
+              'Container completed (streaming mode)',
+            );
+            resolve({
+              status: 'success',
+              result: null,
+              newSessionId,
+            });
+          })
+          .catch((err) => {
+            logger.error(
+              { group: group.name, duration, err },
+              'Container output chain rejected — resolving as error to unblock queue',
+            );
+            resolve({
+              status: 'error',
+              result: null,
+              error: `Output chain rejected: ${err instanceof Error ? err.message : String(err)}`,
+            });
           });
-        });
         return;
       }
 

@@ -57,6 +57,9 @@ SPOTLESS_AGENT="clawd"
 # refresh logic applies to all API calls. ANTHROPIC_BASE_URL points to
 # the host credential proxy (set by container-runner.ts).
 export SPOTLESS_UPSTREAM_URL="${ANTHROPIC_BASE_URL:-https://api.anthropic.com}"
+# Cap Spotless context budget at 200K tokens (upstream default is 500K).
+# 200K keeps history replay useful while staying within Claude Max rate limits.
+export SPOTLESS_CONTEXT_BUDGET="${SPOTLESS_CONTEXT_BUDGET:-200000}"
 if [ "${DISABLE_SPOTLESS:-}" = "1" ]; then
   echo "[entrypoint] Spotless DISABLED via DISABLE_SPOTLESS=1" >&2
 elif command -v spotless >/dev/null 2>&1; then

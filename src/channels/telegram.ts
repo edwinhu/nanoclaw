@@ -190,7 +190,18 @@ export class TelegramChannel implements Channel {
             parse_mode: 'HTML',
           });
         } catch {
-          await this.bot!.api.sendMessage(numericId, chunk);
+          // HTML parse failed — retry as plain text. This fallback must also
+          // be wrapped: an unhandled throw here propagates into outputChain
+          // and would cause runContainerAgent to hang forever (the promise
+          // never resolves, blocking all future message processing).
+          try {
+            await this.bot!.api.sendMessage(numericId, chunk);
+          } catch (err) {
+            logger.warn(
+              { chatId: jid, err },
+              'Failed to send plain-text fallback message',
+            );
+          }
         }
       };
 
