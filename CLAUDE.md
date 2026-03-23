@@ -68,6 +68,18 @@ Key files:
 
 This is **not** the Superhuman/Morgen Electron desktop apps — it's a separate headless Chrome with the web versions.
 
+## Logs
+
+| Log | Location | Contents |
+|-----|----------|----------|
+| Host service | `logs/nanoclaw.log` | Orchestrator, message routing, typing |
+| Host errors | `logs/nanoclaw.error.log` | Service crashes, module errors |
+| Container summary | `groups/{name}/logs/container-*.log` | Post-exit: args, mounts, stderr, stdout |
+| Agent runner | `groups/{name}/logs/agent-*.log` | Real-time: entrypoint, agent-runner stderr, SDK messages |
+| Spotless proxy | `groups/{name}/logs/spotless-*.log` | Real-time: proxy requests, history replay, digests |
+
+Agent and Spotless logs are written inside the container to `/workspace/group/logs/` which is mounted from the host `groups/{name}/` directory — they persist even if the container is OOM-killed.
+
 ## Troubleshooting
 
 **WhatsApp not connecting after upgrade:** WhatsApp is now a separate channel fork, not bundled in core. Run `/add-whatsapp` (or `git remote add whatsapp https://github.com/qwibitai/nanoclaw-whatsapp.git && git fetch whatsapp main && (git merge whatsapp/main || { git checkout --theirs package-lock.json && git add package-lock.json && git merge --continue; }) && npm run build`) to install it. Existing auth credentials and groups are preserved.

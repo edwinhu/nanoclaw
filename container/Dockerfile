@@ -178,6 +178,15 @@ RUN node /tmp/spotless-configurable-context-budget.js \
       "$(dirname $(readlink -f $(which spotless)))/tokens.ts" \
     && rm /tmp/spotless-configurable-context-budget.js
 
+# Patch spotless: store "{}" instead of "" for zero-argument tool_use blocks.
+# Zero-argument MCP tools (e.g. mcp__nanoclaw__list_tasks) produce no partial_json
+# SSE deltas, so StreamTap stores content="" in raw_events. On history replay,
+# tryParseJson("") throws and logs a spurious warning on every replay of that row.
+COPY patches/spotless-fix-empty-tool-input.js /tmp/spotless-fix-empty-tool-input.js
+RUN node /tmp/spotless-fix-empty-tool-input.js \
+      "$(dirname $(readlink -f $(which spotless)))/archiver.ts" \
+    && rm /tmp/spotless-fix-empty-tool-input.js
+
 # Copy CDP helper script
 COPY scripts/cdp-browser /usr/local/bin/cdp-browser
 RUN chmod +x /usr/local/bin/cdp-browser
