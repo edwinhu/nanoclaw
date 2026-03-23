@@ -304,7 +304,12 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
         if (
           currentTask.schedule_type === 'cron' &&
           currentTask.last_run &&
-          Date.now() - new Date(currentTask.last_run).getTime() <
+          Date.now() -
+            new Date(
+              currentTask.last_run.endsWith('Z')
+                ? currentTask.last_run
+                : currentTask.last_run + 'Z',
+            ).getTime() <
             CRON_MIN_INTERVAL_MS
         ) {
           logger.debug(
